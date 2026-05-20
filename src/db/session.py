@@ -1,5 +1,6 @@
 """Database engine and session management."""
 
+import os
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
@@ -11,12 +12,37 @@ from src.config import PROJECT_ROOT, get_settings
 _engine = None
 _SessionLocal = None
 
+SQLITE_DATABASE_URL = "sqlite:///scoutsync.db"
+
+
+def use_sqlite() -> bool:
+    """True when USE_SQLITE env is set to 'true' (case-insensitive)."""
+    return os.getenv("USE_SQLITE", "false").lower() == "true"
+
+
+def sqlite_db_path() -> Path:
+    """Resolved filesystem path for scoutsync.db (relative to process cwd)."""
+    return Path("scoutsync.db").resolve()
+
+
+def resolve_database_url() -> str:
+    """Return SQLite URL or PostgreSQL URL from settings; never mixes both."""
+    if use_sqlite():
+        return SQLITE_DATABASE_URL
+    return get_settings().database_url
+
 
 def get_engine():
     global _engine
     if _engine is None:
-        settings = get_settings()
-        _engine = create_engine(settings.database_url, pool_pre_ping=True)
+        url = resolve_database_url()
+        kwargs: dict = {}
+        if url.startswith("sqlite"):
+            kwargs["connect_args"] = {"check_same_thread": False}
+            kwargs["pool_pre_ping"] = False
+        else:
+            kwargs["pool_pre_ping"] = True
+        _engine = create_engine(url, **kwargs)
     return _engine
 
 
@@ -32,13 +58,12 @@ def get_db_session() -> Session:
 
 
 def init_db() -> None:
-    """Apply schema.sql (PostgreSQL) or ORM create_all (SQLite dev)."""
-    settings = get_settings()
+    """Apply schema.sql (PostgreSQL) or ORM create_all (SQLite)."""
     engine = get_engine()
-    if settings.database_url.startswith("sqlite"):
+    if use_sqlite():
         Base.metadata.create_all(bind=engine)
         _seed_reference_leagues_sqlite()
-        get_logger().info("database_initialized backend=sqlite")
+        get_logger().info("database_initialized backend=sqlite url=scoutsync.db")
         return
 
     schema_path = PROJECT_ROOT / "db" / "schema.sql"
@@ -50,7 +75,7 @@ def init_db() -> None:
             if stmt:
                 conn.execute(text(stmt))
         Base.metadata.create_all(bind=conn)
-    get_logger().info("database_initialized schema=db/schema.sql")
+    get_logger().info("database_initialized schema=db/schema.sql backend=postgresql")
 
 
 def _seed_reference_leagues_sqlite() -> None:
@@ -66,7 +91,14 @@ def _seed_reference_leagues_sqlite() -> None:
                 ("NCAA Division I", "NCAA", 4, 5.50),
                 ("Cape Cod Baseball League", "CCL", 5, 4.90),
             ]:
-                session.add(League(name=name, abbreviation=abbr, competition_tier=tier, base_run_environment=env))
+                session.add(
+                    League(
+                        name=name,
+                        abbreviation=abbr,
+                        competition_tier=tier,
+                        base_run_environment=env,
+                    )
+                )
             session.commit()
     finally:
         session.close()
