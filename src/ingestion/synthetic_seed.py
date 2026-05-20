@@ -22,9 +22,12 @@ def _random_birth_date() -> date:
     return date(int(year), month, day)
 
 
-def seed_synthetic_data(session: Session, num_players: int = 50) -> dict:
+def seed_synthetic_data(session: Session, num_players: int = 50, lite: bool = False) -> dict:
     """Insert synthetic players, stadiums, and tracking rows."""
     logger = get_logger()
+    if lite:
+        num_players = min(num_players, 10)
+        logger.info(f"synthetic_seed_lite num_players={num_players}")
     leagues = {l.abbreviation: l for l in session.query(League).all()}
     ncaa = leagues.get("NCAA")
     ccl = leagues.get("CCL")
@@ -72,8 +75,12 @@ def seed_synthetic_data(session: Session, num_players: int = 50) -> dict:
         stadium = RNG.choice([s for s in stadiums if s.league_id == league.league_id])
         is_pitcher = player.primary_position == "P"
 
-        n_pitch = int(RNG.integers(80, 120)) if is_pitcher else int(RNG.integers(20, 40))
-        n_hit = int(RNG.integers(30, 60)) if not is_pitcher else int(RNG.integers(5, 15))
+        if lite:
+            n_pitch = int(RNG.integers(12, 22)) if is_pitcher else int(RNG.integers(6, 12))
+            n_hit = int(RNG.integers(10, 18)) if not is_pitcher else int(RNG.integers(4, 8))
+        else:
+            n_pitch = int(RNG.integers(80, 120)) if is_pitcher else int(RNG.integers(20, 40))
+            n_hit = int(RNG.integers(30, 60)) if not is_pitcher else int(RNG.integers(5, 15))
 
         base_date = date(context_year, 3, 1) + timedelta(days=int(RNG.integers(0, 120)))
 

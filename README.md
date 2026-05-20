@@ -50,6 +50,8 @@ USE_SQLITE=true streamlit run dashboard.py
 
 Use the sidebar to search/select a player and switch between batter (wOBA) and pitcher (ERA) projections. The main panel shows profile info, 90% confidence metric cards, an outcome density curve, and a SHAP contribution chart.
 
+**Streamlit Cloud:** Set `USE_SQLITE=true` in app secrets. The app auto-detects cloud (`HOME=/home/adminuser`) and uses offline lite seeding (`data/samples/statcast_lite.csv` + 8 synthetic players) with no pybaseball download. Optional: `SCOUTSYNC_CLOUD_LITE=true` forces lite mode locally.
+
 ## API Endpoints
 
 - `GET /health` — database connectivity

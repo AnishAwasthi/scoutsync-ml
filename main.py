@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 if os.getenv("USE_SQLITE", "").lower() in ("1", "true", "yes"):
-    os.environ["USE_SQLITE"] = "true"
+    os.environ["USE_SQLITE"] = "true"  # session.py checks lower() == "true"
 
 from src.config import get_settings
 from src.db.session import get_db_session, init_db

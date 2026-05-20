@@ -46,9 +46,10 @@ class ProjectionView:
 
 
 def db_status() -> tuple[bool, str]:
+    from src.db.session import use_sqlite
+
     if check_db_connection():
-        settings = get_settings()
-        backend = "SQLite" if settings.database_url.startswith("sqlite") else "PostgreSQL"
+        backend = "SQLite" if use_sqlite() else "PostgreSQL"
         return True, backend
     return False, "unavailable"
 

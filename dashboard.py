@@ -19,42 +19,39 @@ if os.getenv("USE_SQLITE", "").lower() in ("1", "true", "yes"):
     os.environ["USE_SQLITE"] = "true"
 
 
-def _use_sqlite() -> bool:
-    return os.getenv("USE_SQLITE", "").lower() in ("1", "true", "yes")
-
-
-def _sqlite_db_path() -> Path:
-    return PROJECT_ROOT / "data" / "scoutsync.db"
-
-
 def bootstrap_sqlite_database() -> None:
     """
     On first run with USE_SQLITE, create and seed the database if missing.
 
     Mirrors `python main.py init-db` and `python main.py seed` before any UI loads.
     """
-    if not _use_sqlite():
-        return
-
-    db_path = _sqlite_db_path()
-    if db_path.exists():
-        return
-
-    from src.config import get_settings
-    from src.db.session import get_db_session, init_db
+    from src.db.session import get_db_session, init_db, sqlite_db_path, use_sqlite
+    from src.ingestion.lite_seed import seed_cloud_lite
     from src.ingestion.pybaseball_loader import seed_mlb_statcast
     from src.ingestion.synthetic_seed import seed_synthetic_data
     from src.logging_config import setup_logging
+    from src.runtime import is_streamlit_cloud
+
+    if not use_sqlite():
+        return
+
+    db_path = sqlite_db_path()
+    if db_path.exists():
+        return
 
     setup_logging()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
     init_db()
 
-    settings = get_settings()
     session = get_db_session()
     try:
-        seed_mlb_statcast(session, validation_year=settings.validation_year)
-        seed_synthetic_data(session, num_players=50)
+        if is_streamlit_cloud():
+            seed_cloud_lite(session, num_amateur_players=8)
+        else:
+            from src.config import get_settings
+
+            settings = get_settings()
+            seed_mlb_statcast(session, validation_year=settings.validation_year)
+            seed_synthetic_data(session, num_players=50)
     finally:
         session.close()
 

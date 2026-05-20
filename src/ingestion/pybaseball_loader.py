@@ -8,8 +8,9 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from db.models import League, Player, RawTrackingData, StadiumEnvironment
-from src.config import get_settings
+from src.config import PROJECT_ROOT, get_settings
 from src.logging_config import get_logger, log_filter_step
+from src.runtime import is_streamlit_cloud
 
 # Module-level caches for baselines and rookie outcomes
 LEAGUE_BASELINES: pd.DataFrame = pd.DataFrame()
@@ -23,12 +24,33 @@ def _ensure_cache_dir() -> Path:
     return path
 
 
+def load_offline_statcast_lite() -> pd.DataFrame:
+    """Pre-baked Statcast sample for Streamlit Cloud (no network)."""
+    path = PROJECT_ROOT / "data" / "samples" / "statcast_lite.csv"
+    logger = get_logger()
+    if path.exists():
+        df = pd.read_csv(path, parse_dates=["game_date"])
+        logger.info(f"statcast_lite_csv rows={len(df)} path={path}")
+        return df
+    logger.warning(f"statcast_lite_csv missing path={path}; using tiny synthetic")
+    return _synthetic_mlb_statcast(2023, 2024, max_rows=40)
+
+
+def load_rookie_outcomes_lite(validation_year: int) -> pd.DataFrame:
+    """Small synthetic rookie table for cloud backtest labels."""
+    return _synthetic_rookie_outcomes(validation_year, n_batters=6, n_pitchers=4)
+
+
 def load_statcast_sample(start_year: int, end_year: int, max_rows: int = 8000) -> pd.DataFrame:
     """
     Load MLB Statcast data via pybaseball with local CSV cache.
 
     Falls back to synthetic MLB-like data if pybaseball/network unavailable.
+    On Streamlit Cloud, never calls pybaseball (offline lite CSV only).
     """
+    if is_streamlit_cloud():
+        return load_offline_statcast_lite()
+
     logger = get_logger()
     cache = _ensure_cache_dir() / f"statcast_{start_year}_{end_year}.csv"
 
@@ -102,6 +124,10 @@ def compute_league_baselines_from_statcast(statcast_df: pd.DataFrame) -> pd.Data
 def load_rookie_outcomes(validation_year: int) -> pd.DataFrame:
     """Build rookie wOBA/ERA table for backtest labels."""
     global ROOKIE_OUTCOMES
+    if is_streamlit_cloud():
+        ROOKIE_OUTCOMES = load_rookie_outcomes_lite(validation_year)
+        return ROOKIE_OUTCOMES
+
     cache = _ensure_cache_dir() / f"rookies_{validation_year}.csv"
     if cache.exists():
         ROOKIE_OUTCOMES = pd.read_csv(cache)
@@ -146,10 +172,14 @@ def load_rookie_outcomes(validation_year: int) -> pd.DataFrame:
     return ROOKIE_OUTCOMES
 
 
-def _synthetic_rookie_outcomes(validation_year: int) -> pd.DataFrame:
+def _synthetic_rookie_outcomes(
+    validation_year: int,
+    n_batters: int = 50,
+    n_pitchers: int = 30,
+) -> pd.DataFrame:
     rng = np.random.default_rng(99)
-    n = 80
-    roles = ["batter"] * 50 + ["pitcher"] * 30
+    n = n_batters + n_pitchers
+    roles = ["batter"] * n_batters + ["pitcher"] * n_pitchers
     return pd.DataFrame(
         {
             "mlb_player_key": [f"mlb_{i}" for i in range(n)],
@@ -195,6 +225,11 @@ def build_pseudo_rookie_map(amateur_player_ids: list[int], rookie_df: pd.DataFra
 
 def seed_mlb_statcast(session: Session, validation_year: int | None = None) -> dict:
     """Load Statcast sample into DB and populate global baselines."""
+    if is_streamlit_cloud():
+        from src.ingestion.lite_seed import seed_mlb_from_offline_csv
+
+        return seed_mlb_from_offline_csv(session)
+
     global LEAGUE_BASELINES
     settings = get_settings()
     validation_year = validation_year or settings.validation_year

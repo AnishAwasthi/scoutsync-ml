@@ -1,5 +1,6 @@
 """Application configuration."""
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -39,13 +40,13 @@ class Settings(BaseSettings):
     gas_constant: float = 8.314
 
 
+def _use_sqlite_env() -> bool:
+    return os.getenv("USE_SQLITE", "false").lower() == "true"
+
+
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
-    if settings.use_sqlite:
-        sqlite_path = PROJECT_ROOT / "data" / "scoutsync.db"
-        sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-        return settings.model_copy(
-            update={"database_url": f"sqlite:///{sqlite_path}"}
-        )
+    if _use_sqlite_env():
+        return settings.model_copy(update={"database_url": "sqlite:///scoutsync.db"})
     return settings
