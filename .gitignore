@@ -1,0 +1,20 @@
+# Virtual Environment
+.venv/
+__pycache__/
+*.pyc
+
+# Local Databases & State
+*.db
+*.sqlite
+.env
+
+# OS specific files
+.DS_Store.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/pybaseball_cache/
+*.joblib
+.pytest_cache/
+.DS_Store

@@ -1,0 +1,5 @@
+PitcherId,GameDate,PitchType,RelSpeed,SpinRate,VertBreak,HorzBreak,VAA,Extension,PlateLocSide,PlateLocHeight,StadiumId,ContextYear
+1,2023-03-15,FF,91.2,2150,16.5,-7.2,-5.4,6.1,0.12,2.45,1,2023
+1,2023-03-15,SL,84.5,2380,8.2,2.1,-6.1,5.9,-0.35,1.95,1,2023
+2,2023-04-02,FF,93.8,2280,17.1,-8.0,-5.2,6.3,0.05,2.60,2,2023
+2,2023-04-02,CH,86.0,1900,10.5,-4.5,-5.8,6.0,0.40,2.20,2,2023
