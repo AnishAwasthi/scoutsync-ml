@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -9,9 +10,8 @@ from typing import Any
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from db.models import MlbProjection, Player
 from src.config import get_settings
-from src.db.session import check_db_connection, get_db_session
+from src.db.session import MlbProjection, Player, check_db_connection, get_db_session
 from src.features.builder import BATTER_FEATURES, PITCHER_FEATURES, build_training_frames
 from src.ml.model import ScoutSyncTranslationModel
 from src.ml.shap_engine import shap_for_player_row
@@ -101,13 +101,30 @@ def get_player(session: Session, player_id: int) -> PlayerProfile | None:
     )
 
 
+def _parse_shap_json(raw: Any) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
+def _projection_order_by(query):
+    """Order projections by id (cloud schema) or calculation_date (full ORM schema)."""
+    if hasattr(MlbProjection, "calculation_date"):
+        return query.order_by(MlbProjection.calculation_date.desc())
+    return query.order_by(MlbProjection.id.desc())
+
+
 def get_projection(session: Session, player_id: int, role: str) -> ProjectionView | None:
     """Load latest projection for batter (wOBA) or pitcher (ERA)."""
-    settings = get_settings()
-    q = (
-        session.query(MlbProjection)
-        .filter(MlbProjection.player_id == player_id)
-        .order_by(MlbProjection.calculation_date.desc())
+    q = _projection_order_by(
+        session.query(MlbProjection).filter(MlbProjection.player_id == player_id)
     )
     if role == "batter":
         q = q.filter(MlbProjection.proj_wOBA.isnot(None))
@@ -122,15 +139,17 @@ def get_projection(session: Session, player_id: int, role: str) -> ProjectionVie
             lower_90=_to_float(row.proj_wOBA_lower_90),
             upper_90=_to_float(row.proj_wOBA_upper_90),
             variance_delta=_estimate_variance_delta(row),
-            shap_json=row.shap_explainability_json,
+            shap_json=_parse_shap_json(row.shap_explainability_json),
             metric_label="Projected MLB wOBA",
             metric_unit="wOBA",
         )
 
-    q = session.query(MlbProjection).filter(
-        MlbProjection.player_id == player_id,
-        MlbProjection.proj_ERA.isnot(None),
-    ).order_by(MlbProjection.calculation_date.desc())
+    q = _projection_order_by(
+        session.query(MlbProjection).filter(
+            MlbProjection.player_id == player_id,
+            MlbProjection.proj_ERA.isnot(None),
+        )
+    )
     row = q.first()
     if not row:
         return None
@@ -142,7 +161,7 @@ def get_projection(session: Session, player_id: int, role: str) -> ProjectionVie
         lower_90=_to_float(row.proj_ERA_lower_90),
         upper_90=_to_float(row.proj_ERA_upper_90),
         variance_delta=_estimate_variance_delta(row),
-        shap_json=row.shap_explainability_json,
+        shap_json=_parse_shap_json(row.shap_explainability_json),
         metric_label="Projected MLB ERA",
         metric_unit="ERA",
     )
@@ -202,6 +221,23 @@ def load_translation_model() -> LoadedModel:
     return LoadedModel(model=model, available=True, message="ok")
 
 
+def _shap_dict_to_contributions(shap_data: dict[str, Any], target_key: str) -> list[dict[str, Any]]:
+    """Support nested SHAP lists or flat cloud mock dicts {label: impact}."""
+    items = shap_data.get(target_key)
+    if isinstance(items, list) and items:
+        return items
+    for value in shap_data.values():
+        if isinstance(value, list) and value:
+            return value
+    contributions = []
+    for key, val in shap_data.items():
+        if isinstance(val, (int, float)):
+            contributions.append(
+                {"feature": key, "label": key, "impact": float(val)},
+            )
+    return contributions
+
+
 def resolve_shap_contributions(
     session: Session,
     player_id: int,
@@ -212,12 +248,7 @@ def resolve_shap_contributions(
     """Return SHAP contributions from DB or recompute via saved model."""
     target_key = "proj_wOBA" if role == "batter" else "proj_ERA"
     if projection and projection.shap_json:
-        items = projection.shap_json.get(target_key)
-        if not items:
-            for value in projection.shap_json.values():
-                if isinstance(value, list) and value:
-                    items = value
-                    break
+        items = _shap_dict_to_contributions(projection.shap_json, target_key)
         if items:
             return items
 

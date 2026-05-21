@@ -48,9 +48,17 @@ from src.pipeline import get_player_breakdown
 
 
 def bootstrap_sqlite_database() -> None:
-    """Dynamically bootstraps a lightweight database directly for the cloud app"""
-    init_db()
-    
+    """Dynamically bootstraps a lightweight database directly for the cloud app."""
+    from src.db.session import use_sqlite
+
+    if not use_sqlite():
+        return
+
+    try:
+        init_db()
+    except Exception as exc:
+        print(f"init_db warning (continuing): {exc}")
+
     db = SessionLocal()
     try:
         player_count = db.query(Player).count()
