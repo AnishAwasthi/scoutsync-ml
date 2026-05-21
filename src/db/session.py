@@ -175,3 +175,12 @@ def check_db_connection() -> bool:
         return True
     except Exception:
         return False
+
+
+def has_tracking_schema() -> bool:
+    """True when full tracking pipeline tables exist (not cloud lite schema)."""
+    try:
+        inspector = inspect(get_engine())
+        return inspector.has_table("raw_tracking_data")
+    except Exception:
+        return False

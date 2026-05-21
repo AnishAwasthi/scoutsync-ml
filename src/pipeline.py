@@ -15,6 +15,7 @@ from src.ingestion.pybaseball_loader import (
     build_pseudo_rookie_map,
     load_rookie_outcomes,
 )
+from src.db.session import has_tracking_schema
 from src.logging_config import get_logger, log_filter_step
 from src.ml.model import ScoutSyncTranslationModel, prepare_targets, train_models_from_frames
 from src.ml.shap_engine import shap_for_player_row
@@ -24,6 +25,10 @@ from src.normalization.league_context import apply_league_normalization, compute
 
 def load_tracking_dataframe(session: Session) -> pd.DataFrame:
     """Load raw tracking joined with player, stadium, league context."""
+    if not has_tracking_schema():
+        get_logger().info("load_tracking_skipped reason=no_raw_tracking_table")
+        return pd.DataFrame()
+
     rows = (
         session.query(RawTrackingData)
         .options(
@@ -215,6 +220,15 @@ def persist_projections(
 
 def get_player_breakdown(session: Session, player_id: int) -> dict:
     """Raw vs adjusted distributions for charting API."""
+    if not has_tracking_schema():
+        return {
+            "player_id": player_id,
+            "error": "no_tracking_data",
+            "raw_distribution": {"name": "raw", "bins": [], "counts": []},
+            "adjusted_distribution": {"name": "adjusted", "bins": [], "counts": []},
+            "shap_contributions": _latest_shap(session, player_id),
+        }
+
     raw = load_tracking_dataframe(session)
     player_raw = raw[raw["player_id"] == player_id]
     if player_raw.empty:
@@ -244,10 +258,23 @@ def get_player_breakdown(session: Session, player_id: int) -> dict:
 
 
 def _latest_shap(session: Session, player_id: int) -> dict:
-    proj = (
-        session.query(MlbProjection)
-        .filter_by(player_id=player_id)
-        .order_by(MlbProjection.calculation_date.desc())
-        .first()
-    )
-    return proj.shap_explainability_json if proj else {}
+    """Load SHAP JSON using schema compatible with cloud lite or full ORM."""
+    from src.db.session import MlbProjection as SessionProjection
+    from src.db.session import use_sqlite
+    import json
+
+    Model = SessionProjection if use_sqlite() else MlbProjection
+    q = session.query(Model).filter_by(player_id=player_id)
+    if hasattr(Model, "calculation_date"):
+        proj = q.order_by(Model.calculation_date.desc()).first()
+    else:
+        proj = q.order_by(Model.id.desc()).first()
+    if not proj or not proj.shap_explainability_json:
+        return {}
+    raw = proj.shap_explainability_json
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return raw if isinstance(raw, dict) else {}

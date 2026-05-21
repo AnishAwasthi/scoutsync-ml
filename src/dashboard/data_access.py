@@ -181,6 +181,11 @@ def _estimate_variance_delta(proj: MlbProjection) -> float | None:
 
 
 def get_player_feature_row(session: Session, player_id: int, role: str) -> pd.Series | None:
+    from src.db.session import has_tracking_schema
+
+    if not has_tracking_schema():
+        return None
+
     raw = load_tracking_dataframe(session)
     player_raw = raw[raw["player_id"] == player_id]
     if player_raw.empty:

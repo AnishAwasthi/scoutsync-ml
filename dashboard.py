@@ -312,7 +312,12 @@ def main() -> None:
                     "Re-run `python main.py train` to refresh explainability payloads."
                 )
 
-        if not breakdown.get("error"):
+        if breakdown.get("error") == "no_tracking_data":
+            st.caption(
+                "Pitch-level tracking charts are unavailable in cloud demo mode "
+                "(projections and SHAP are still shown above)."
+            )
+        elif not breakdown.get("error"):
             st.divider()
             st.subheader("Raw vs Adjusted Tracking")
             c1, c2 = st.columns(2)
