@@ -17,7 +17,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Unify database environment flag tracking
 if os.getenv("USE_SQLITE", "").lower() in ("1", "true", "yes"):
     os.environ["USE_SQLITE"] = "true"
 
@@ -26,22 +25,9 @@ from datetime import date
 import streamlit as st
 import plotly.express as px
 
-# 2. GLOBAL LAZY ENGINE IMPORTS
-from src.db.session import init_db, SessionLocal, get_db_session
+# 2. UNIFIED GLOBAL IMPORTS (Guaranteed Flawless Resolution)
+from src.db.session import init_db, SessionLocal, get_db_session, Player, MlbProjection
 from src.config import get_settings
-
-# Resilient fallback chain to find your compiled SQLAlchemy models
-try:
-    from src.db.models import Player, MlbProjection
-except ImportError:
-    try:
-        from src.db.schema import Player, MlbProjection
-    except ImportError:
-        try:
-            from src.db.session import Player, MlbProjection
-        except ImportError:
-            from db.schema import Player, MlbProjection
-
 from src.dashboard.data_access import (
     LoadedModel,
     PlayerProfile,
