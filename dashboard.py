@@ -12,7 +12,7 @@ import os
 import sys
 from pathlib import Path
 
-# 1. FORCE PROJECT ROOT TO FRONT OF PYTHON PATH (Must be step 1)
+# 1. FORCE PROJECT ROOT TO FRONT OF PYTHON PATH
 PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -26,13 +26,11 @@ from datetime import date
 import streamlit as st
 import plotly.express as px
 
-# 2. GLOBAL ENGINE & SCHEMA IMPORTS (Fixes Cloud ImportError)
-from src.db.session import init_db, SessionLocal, get_db_session
-# 2. GLOBAL ENGINE & SCHEMA IMPORTS
+# 2. GLOBAL LAZY ENGINE IMPORTS
 from src.db.session import init_db, SessionLocal, get_db_session
 from src.config import get_settings
 
-# Safe fallback chain to find where the agent compiled your SQLAlchemy models
+# Resilient fallback chain to find your compiled SQLAlchemy models
 try:
     from src.db.models import Player, MlbProjection
 except ImportError:
@@ -42,8 +40,8 @@ except ImportError:
         try:
             from src.db.session import Player, MlbProjection
         except ImportError:
-            from db.schema import Player, MlbProjection 
-from src.config import get_settings
+            from db.schema import Player, MlbProjection
+
 from src.dashboard.data_access import (
     LoadedModel,
     PlayerProfile,
@@ -65,12 +63,10 @@ from src.pipeline import get_player_breakdown
 
 def bootstrap_sqlite_database() -> None:
     """Dynamically bootstraps a lightweight database directly for the cloud app"""
-    # Initialize the database tables safely
     init_db()
     
     db = SessionLocal()
     try:
-        # Check if we already have data so we don't duplicate it
         player_count = db.query(Player).count()
         if player_count > 0:
             return  # Database is already populated!
@@ -134,7 +130,7 @@ def bootstrap_sqlite_database() -> None:
         db.close()
 
 
-# Run cloud bootstrap sequence safely before loading the UI state machine
+# Run cloud bootstrap sequence safely before loading UI state components
 bootstrap_sqlite_database()
 
 st.set_page_config(
@@ -157,7 +153,7 @@ def cached_players() -> list[dict]:
         return [
             {
                 "player_id": p.player_id,
-                "full_name": p.full_name,
+                "full_name": getattr(p, 'full_name', f"{p.first_name} {p.last_name}"),
                 "position": p.primary_position or "—",
             }
             for p in list_players(session)
@@ -195,8 +191,10 @@ def render_metric_cards(projection: ProjectionView) -> None:
 def render_player_profile(profile: PlayerProfile, role: str) -> None:
     st.subheader("Player Profile")
     col_a, col_b, col_c, col_d = st.columns(4)
-    col_a.markdown(f"**Name** \n{profile.full_name}")
-    col_b.markdown(f"**Age** \n{profile.age if profile.age is not None else '—'}")
+    p_name = getattr(profile, 'full_name', f"{getattr(profile, 'first_name', '')} {getattr(profile, 'last_name', '')}")
+    p_age = getattr(profile, 'age', '—')
+    col_a.markdown(f"**Name** \n{p_name}")
+    col_b.markdown(f"**Age** \n{p_age}")
     col_c.markdown(f"**Bats / Throws** \n{profile.bats or '—'} / {profile.throws or '—'}")
     col_d.markdown(f"**Position** \n{profile.primary_position or '—'}")
     st.caption(f"Viewing **{role.title()}** projections · Target season {get_settings().validation_year}")
