@@ -2,9 +2,9 @@
 
 > A Cross-League Predictive Analytics & Translation Engine for Professional Baseball Scouting.
 
-[![Live Demo]([https://img.shields.io/badge/Demo-Streamlit_Cloud-FF4B4B?logo=streamlit)](YOUR_STREAMLIT_URL_HERE)](https://img.shields.io/badge/Demo-Streamlit_Cloud-FF4B4B?logo=streamlit)](YOUR_STREAMLIT_URL_HERE))
+[![Live Demo](https://img.shields.io/badge/Demo-Streamlit_Cloud-FF4B4B?logo=streamlit)](https://scoutsync-ml-sumemxdakhf3zpuagqcyae.streamlit.app/)
 
-[![CI/CD Pipeline]([https://img.shields.io/badge/CI%2FCD-GitHub_Actions-2088FF?logo=github-actions)](https://github.com/AnishAwasthi/scoutsync-ml/actions)](https://img.shields.io/badge/CI%2FCD-GitHub_Actions-2088FF?logo=github-actions)](https://github.com/AnishAwasthi/scoutsync-ml/actions))
+[![CI/CD Pipeline](https://img.shields.io/badge/CI%2FCD-GitHub_Actions-2088FF?logo=github-actions)](https://github.com/AnishAwasthi/scoutsync-ml/actions)
 
 ## 💡 The Core Problem
 
