@@ -1,6 +1,7 @@
 import os
-import sys
-from sqlalchemy import create_engine, Column, Integer, String, Date, Float, Text
+from pathlib import Path
+
+from sqlalchemy import Column, Date, Float, Integer, String, Text, create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -108,3 +109,36 @@ class LazySessionLocal:
         return getattr(get_session_factory(), name)
 
 SessionLocal = LazySessionLocal()
+
+
+def use_sqlite() -> bool:
+    """True when SQLite mode is active (env, Streamlit secrets, or cloud auto-detect)."""
+    val = os.getenv("USE_SQLITE", "false").lower().strip()
+    if val in ("true", "1", "yes"):
+        return True
+    try:
+        import streamlit as st
+
+        if "USE_SQLITE" in st.secrets:
+            secret_val = str(st.secrets["USE_SQLITE"]).lower().strip()
+            if secret_val in ("true", "1", "yes"):
+                return True
+    except Exception:
+        pass
+    if os.getenv("HOME") == "/home/adminuser" or "STREAMLIT_SERVER_PORT" in os.environ:
+        return True
+    return "sqlite" in str(get_engine().url)
+
+
+def sqlite_db_path() -> Path:
+    return Path("scoutsync.db").resolve()
+
+
+def check_db_connection() -> bool:
+    """Verify the database engine can execute a simple query."""
+    try:
+        with get_engine().connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
