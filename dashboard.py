@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import os
 import sys
+
+# Force Python to recognize the project root directory for imports
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
