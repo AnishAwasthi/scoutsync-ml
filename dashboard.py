@@ -10,28 +10,48 @@ from __future__ import annotations
 
 import os
 import sys
-
-# Force Python to recognize the project root directory for imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 from pathlib import Path
 
+# 1. FORCE PROJECT ROOT TO FRONT OF PYTHON PATH (Must be step 1)
 PROJECT_ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(PROJECT_ROOT))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
+# Unify database environment flag tracking
 if os.getenv("USE_SQLITE", "").lower() in ("1", "true", "yes"):
     os.environ["USE_SQLITE"] = "true"
 
+import json
+from datetime import date
+import streamlit as st
+import plotly.express as px
 
-def bootstrap_sqlite_database():
+# 2. GLOBAL ENGINE & SCHEMA IMPORTS (Fixes Cloud ImportError)
+from src.db.session import init_db, SessionLocal, get_db_session
+from db.schema import Player, MlbProjection 
+from src.config import get_settings
+from src.dashboard.data_access import (
+    LoadedModel,
+    PlayerProfile,
+    ProjectionView,
+    db_status,
+    get_player,
+    get_projection,
+    list_players,
+    load_translation_model,
+    resolve_shap_contributions,
+)
+from src.dashboard.visualizations import (
+    projection_density_figure,
+    shap_bar_figure,
+    tracking_histogram_figure,
+)
+from src.pipeline import get_player_breakdown
+
+
+def bootstrap_sqlite_database() -> None:
     """Dynamically bootstraps a lightweight database directly for the cloud app"""
-    import os
-    from datetime import date
-    import json
-    from src.db.session import init_db, SessionLocal
-    from db.schema import Player, MlbProjection  # Adjust these import names if your schema models are named differently
-    
-    # 1. Initialize the database tables safely
+    # Initialize the database tables safely
     init_db()
     
     db = SessionLocal()
@@ -43,7 +63,7 @@ def bootstrap_sqlite_database():
             
         print("Cloud environment detected. Injecting lightweight mock profiles...")
         
-        # 2. Hardcode 3 high-profile sample players to guarantee zero-memory cloud execution
+        # Hardcode 3 high-profile sample players to guarantee zero-memory cloud execution
         mock_players = [
             Player(player_id=1, first_name="Shohei", last_name="Ohtani", birth_date=date(1994, 7, 5), throws="R", bats="L", primary_position="DH"),
             Player(player_id=2, first_name="Aaron", last_name="Judge", birth_date=date(1992, 4, 26), throws="R", bats="R", primary_position="OF"),
@@ -54,7 +74,7 @@ def bootstrap_sqlite_database():
             db.add(p)
         db.commit()
         
-        # 3. Hardcode their translated projection cards and SHAP parameters
+        # Hardcode their translated prediction cards and SHAP parameters
         mock_projections = [
             MlbProjection(
                 player_id=1, target_season=2026,
@@ -99,29 +119,9 @@ def bootstrap_sqlite_database():
     finally:
         db.close()
 
+
+# Run cloud bootstrap sequence safely before loading the UI state machine
 bootstrap_sqlite_database()
-
-import streamlit as st
-
-from src.config import get_settings
-from src.dashboard.data_access import (
-    LoadedModel,
-    PlayerProfile,
-    ProjectionView,
-    db_status,
-    get_player,
-    get_projection,
-    list_players,
-    load_translation_model,
-    resolve_shap_contributions,
-)
-from src.dashboard.visualizations import (
-    projection_density_figure,
-    shap_bar_figure,
-    tracking_histogram_figure,
-)
-from src.db.session import get_db_session
-from src.pipeline import get_player_breakdown
 
 st.set_page_config(
     page_title="ScoutSync ML",
@@ -181,10 +181,10 @@ def render_metric_cards(projection: ProjectionView) -> None:
 def render_player_profile(profile: PlayerProfile, role: str) -> None:
     st.subheader("Player Profile")
     col_a, col_b, col_c, col_d = st.columns(4)
-    col_a.markdown(f"**Name**  \n{profile.full_name}")
-    col_b.markdown(f"**Age**  \n{profile.age if profile.age is not None else '—'}")
-    col_c.markdown(f"**Bats / Throws**  \n{profile.bats or '—'} / {profile.throws or '—'}")
-    col_d.markdown(f"**Position**  \n{profile.primary_position or '—'}")
+    col_a.markdown(f"**Name** \n{profile.full_name}")
+    col_b.markdown(f"**Age** \n{profile.age if profile.age is not None else '—'}")
+    col_c.markdown(f"**Bats / Throws** \n{profile.bats or '—'} / {profile.throws or '—'}")
+    col_d.markdown(f"**Position** \n{profile.primary_position or '—'}")
     st.caption(f"Viewing **{role.title()}** projections · Target season {get_settings().validation_year}")
 
 
