@@ -28,7 +28,21 @@ import plotly.express as px
 
 # 2. GLOBAL ENGINE & SCHEMA IMPORTS (Fixes Cloud ImportError)
 from src.db.session import init_db, SessionLocal, get_db_session
-from db.schema import Player, MlbProjection 
+# 2. GLOBAL ENGINE & SCHEMA IMPORTS
+from src.db.session import init_db, SessionLocal, get_db_session
+from src.config import get_settings
+
+# Safe fallback chain to find where the agent compiled your SQLAlchemy models
+try:
+    from src.db.models import Player, MlbProjection
+except ImportError:
+    try:
+        from src.db.schema import Player, MlbProjection
+    except ImportError:
+        try:
+            from src.db.session import Player, MlbProjection
+        except ImportError:
+            from db.schema import Player, MlbProjection 
 from src.config import get_settings
 from src.dashboard.data_access import (
     LoadedModel,
