@@ -11,7 +11,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
-from src.db.session import MlbProjection, Player, check_db_connection, get_db_session
+from src.db.session import MlbProjection, Player, check_db_connection
 from src.features.builder import BATTER_FEATURES, PITCHER_FEATURES, build_training_frames
 from src.ml.model import ScoutSyncTranslationModel
 from src.ml.shap_engine import shap_for_player_row
@@ -52,6 +52,21 @@ def db_status() -> tuple[bool, str]:
         backend = "SQLite" if use_sqlite() else "PostgreSQL"
         return True, backend
     return False, "unavailable"
+
+
+def projected_player_ids(session: Session, role: str | None = None) -> set[int]:
+    """
+    Player ids with a stored projection, optionally for one role only.
+
+    Role filtering keeps the dashboard's picker honest: a pitcher has no wOBA row, so
+    listing them under "Batter Projections" only leads to a dead end.
+    """
+    query = session.query(MlbProjection.player_id)
+    if role == "batter":
+        query = query.filter(MlbProjection.proj_wOBA.isnot(None))
+    elif role == "pitcher":
+        query = query.filter(MlbProjection.proj_ERA.isnot(None))
+    return {pid for (pid,) in query.distinct().all() if pid is not None}
 
 
 def list_players(session: Session) -> list[PlayerProfile]:
@@ -226,21 +241,26 @@ def load_translation_model() -> LoadedModel:
     return LoadedModel(model=model, available=True, message="ok")
 
 
+# Keys in a stored SHAP payload that carry metadata rather than a contribution.
+_SHAP_META_KEYS = {"approximate"}
+
+
 def _shap_dict_to_contributions(shap_data: dict[str, Any], target_key: str) -> list[dict[str, Any]]:
-    """Support nested SHAP lists or flat cloud mock dicts {label: impact}."""
+    """Extract the contribution list from a stored SHAP payload."""
     items = shap_data.get(target_key)
-    if isinstance(items, list) and items:
+    if isinstance(items, list):
         return items
-    for value in shap_data.values():
+    for key, value in shap_data.items():
+        if key in _SHAP_META_KEYS:
+            continue
         if isinstance(value, list) and value:
             return value
-    contributions = []
-    for key, val in shap_data.items():
-        if isinstance(val, (int, float)):
-            contributions.append(
-                {"feature": key, "label": key, "impact": float(val)},
-            )
-    return contributions
+    return []
+
+
+def shap_is_approximate(shap_data: dict[str, Any] | None) -> bool:
+    """True when the payload came from the importance fallback, not exact SHAP."""
+    return bool(shap_data) and bool(shap_data.get("approximate"))
 
 
 def resolve_shap_contributions(
@@ -265,12 +285,12 @@ def resolve_shap_contributions(
     if row is None:
         return []
 
-    est = model_bundle.model.batter_model if role == "batter" else model_bundle.model.pitcher_model
+    est = model_bundle.model.get_estimator(role)
     if est is None:
         return []
 
     try:
-        payload = shap_for_player_row(est, row, features, role)
+        payload = shap_for_player_row(est, row, list(features), role)
         return payload.get(target_key, [])
     except Exception:
         return []

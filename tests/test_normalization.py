@@ -3,7 +3,11 @@
 import pandas as pd
 
 from src.config import get_settings
-from src.normalization.environment import adjust_velocity, air_density_kg_m3, apply_environmental_adjustments
+from src.normalization.environment import (
+    adjust_velocity,
+    air_density_kg_m3,
+    apply_environmental_adjustments,
+)
 from src.normalization.league_context import gamma_for_tier, normalize_metric
 
 

@@ -1,4 +1,16 @@
-"""pybaseball Statcast ingestion and rookie outcome tables."""
+"""
+Statcast ingestion for MLB reference data.
+
+MLB rows exist to establish the tier-1 league baselines (mu/sigma per metric) that the
+league-normalization step normalizes against. They are deliberately *not* training
+labels: linking an amateur player to their eventual major-league outcome requires an
+identity mapping that no public dataset provides. Training labels come from the
+simulation ground truth in ``src.ingestion.synthetic_seed`` instead.
+
+An earlier version of this module fabricated labels by pairing amateur player *i* with
+MLB rookie *i mod N* -- a round-robin with no relationship between the two players. Any
+accuracy measured against those labels was meaningless, so the whole mechanism is gone.
+"""
 
 from datetime import date
 from pathlib import Path
@@ -12,10 +24,10 @@ from src.config import PROJECT_ROOT, get_settings
 from src.logging_config import get_logger, log_filter_step
 from src.runtime import is_streamlit_cloud
 
-# Module-level caches for baselines and rookie outcomes
+# Tier-1 baselines derived from the Statcast sample, consumed by normalize_tracking_df.
 LEAGUE_BASELINES: pd.DataFrame = pd.DataFrame()
-ROOKIE_OUTCOMES: pd.DataFrame = pd.DataFrame()
-PSEUDO_ROOKIE_MAP: pd.DataFrame = pd.DataFrame()
+
+MAX_REFERENCE_PLAYERS = 60
 
 
 def _ensure_cache_dir() -> Path:
@@ -32,21 +44,17 @@ def load_offline_statcast_lite() -> pd.DataFrame:
         df = pd.read_csv(path, parse_dates=["game_date"])
         logger.info(f"statcast_lite_csv rows={len(df)} path={path}")
         return df
-    logger.warning(f"statcast_lite_csv missing path={path}; using tiny synthetic")
+    logger.warning(f"statcast_lite_csv missing path={path}; using synthetic stand-in")
     return _synthetic_mlb_statcast(2023, 2024, max_rows=40)
-
-
-def load_rookie_outcomes_lite(validation_year: int) -> pd.DataFrame:
-    """Small synthetic rookie table for cloud backtest labels."""
-    return _synthetic_rookie_outcomes(validation_year, n_batters=6, n_pitchers=4)
 
 
 def load_statcast_sample(start_year: int, end_year: int, max_rows: int = 8000) -> pd.DataFrame:
     """
-    Load MLB Statcast data via pybaseball with local CSV cache.
+    Load MLB Statcast data via pybaseball with a local CSV cache.
 
-    Falls back to synthetic MLB-like data if pybaseball/network unavailable.
-    On Streamlit Cloud, never calls pybaseball (offline lite CSV only).
+    Falls back to synthetic MLB-like rows when pybaseball or the network is unavailable,
+    logging a warning so the substitution is visible. On Streamlit Cloud this never hits
+    the network -- it reads the committed lite CSV.
     """
     if is_streamlit_cloud():
         return load_offline_statcast_lite()
@@ -75,6 +83,7 @@ def load_statcast_sample(start_year: int, end_year: int, max_rows: int = 8000) -
 
 
 def _synthetic_mlb_statcast(start_year: int, end_year: int, max_rows: int) -> pd.DataFrame:
+    """MLB-shaped stand-in used only when the real feed cannot be reached."""
     rng = np.random.default_rng(7)
     n = min(max_rows, 5000)
     years = list(range(start_year, end_year + 1))
@@ -104,10 +113,12 @@ def compute_league_baselines_from_statcast(statcast_df: pd.DataFrame) -> pd.Data
         ("release_spin_rate", "spin_rate"),
         ("launch_speed", "exit_velocity"),
     ]
-    for src, metric in mappings:
-        if src not in statcast_df.columns:
+    for source, metric in mappings:
+        if source not in statcast_df.columns:
             continue
-        series = statcast_df[src].dropna()
+        series = statcast_df[source].dropna()
+        if series.empty:
+            continue
         records.append(
             {
                 "league_id": 1,
@@ -121,110 +132,28 @@ def compute_league_baselines_from_statcast(statcast_df: pd.DataFrame) -> pd.Data
     return pd.DataFrame(records)
 
 
-def load_rookie_outcomes(validation_year: int) -> pd.DataFrame:
-    """Build rookie wOBA/ERA table for backtest labels."""
-    global ROOKIE_OUTCOMES
-    if is_streamlit_cloud():
-        ROOKIE_OUTCOMES = load_rookie_outcomes_lite(validation_year)
-        return ROOKIE_OUTCOMES
-
-    cache = _ensure_cache_dir() / f"rookies_{validation_year}.csv"
-    if cache.exists():
-        ROOKIE_OUTCOMES = pd.read_csv(cache)
-        return ROOKIE_OUTCOMES
-
-    try:
-        from pybaseball import batting_stats, pitching_stats
-
-        bat = batting_stats(validation_year, qual=0)
-        pit = pitching_stats(validation_year, qual=0)
-        bat_rookies = bat[bat["PA"] < 130].copy() if "PA" in bat.columns else bat.head(50)
-        pit_rookies = pit[pit["IP"] < 50].copy() if "ID" in pit.columns else pit.head(30)
-
-        rows = []
-        for _, r in bat_rookies.iterrows():
-            woba_col = "wOBA" if "wOBA" in r else "OBP"
-            rows.append(
-                {
-                    "mlb_player_key": str(r.get("ID", r.get("Name", ""))),
-                    "role": "batter",
-                    "true_wOBA": float(r.get(woba_col, 0.31)),
-                    "true_ERA": np.nan,
-                    "context_year": validation_year - 1,
-                }
-            )
-        for _, r in pit_rookies.iterrows():
-            rows.append(
-                {
-                    "mlb_player_key": str(r.get("ID", r.get("Name", ""))),
-                    "role": "pitcher",
-                    "true_wOBA": np.nan,
-                    "true_ERA": float(r.get("ERA", 4.50)),
-                    "context_year": validation_year - 1,
-                }
-            )
-        ROOKIE_OUTCOMES = pd.DataFrame(rows)
-    except Exception as exc:
-        get_logger().warning(f"rookie_outcomes_fallback reason={exc}")
-        ROOKIE_OUTCOMES = _synthetic_rookie_outcomes(validation_year)
-
-    ROOKIE_OUTCOMES.to_csv(cache, index=False)
-    return ROOKIE_OUTCOMES
-
-
-def _synthetic_rookie_outcomes(
-    validation_year: int,
-    n_batters: int = 50,
-    n_pitchers: int = 30,
-) -> pd.DataFrame:
-    rng = np.random.default_rng(99)
-    n = n_batters + n_pitchers
-    roles = ["batter"] * n_batters + ["pitcher"] * n_pitchers
-    return pd.DataFrame(
-        {
-            "mlb_player_key": [f"mlb_{i}" for i in range(n)],
-            "role": roles,
-            "true_wOBA": np.where(
-                np.array(roles) == "batter",
-                rng.normal(0.31, 0.04, n),
-                np.nan,
-            ),
-            "true_ERA": np.where(
-                np.array(roles) == "pitcher",
-                rng.normal(4.2, 0.8, n),
-                np.nan,
-            ),
-            "context_year": validation_year - 1,
-        }
+def _reference_stadium(session: Session, mlb: League) -> StadiumEnvironment:
+    stadium = (
+        session.query(StadiumEnvironment)
+        .filter_by(league_id=mlb.league_id, stadium_name="MLB Reference Park")
+        .first()
     )
-
-
-def build_pseudo_rookie_map(amateur_player_ids: list[int], rookie_df: pd.DataFrame) -> pd.DataFrame:
-    """Deterministic amateur -> MLB rookie mapping for backtest."""
-    global PSEUDO_ROOKIE_MAP
-    if rookie_df.empty:
-        return pd.DataFrame()
-    keys = rookie_df["mlb_player_key"].tolist()
-    rows = []
-    for i, pid in enumerate(amateur_player_ids):
-        key = keys[i % len(keys)]
-        row = rookie_df[rookie_df["mlb_player_key"] == key].iloc[0]
-        rows.append(
-            {
-                "player_id": pid,
-                "mlb_player_key": key,
-                "role": row["role"],
-                "true_wOBA": row.get("true_wOBA"),
-                "true_ERA": row.get("true_ERA"),
-                "context_year": int(row.get("context_year", 2023)),
-            }
-        )
-    PSEUDO_ROOKIE_MAP = pd.DataFrame(rows)
-    return PSEUDO_ROOKIE_MAP
+    if stadium:
+        return stadium
+    stadium = StadiumEnvironment(
+        league_id=mlb.league_id,
+        stadium_name="MLB Reference Park",
+        altitude=500,
+        temperature_mean=22.0,
+        humidity_mean=50.0,
+    )
+    session.add(stadium)
+    session.flush()
+    return stadium
 
 
 def seed_mlb_statcast(session: Session, validation_year: int | None = None) -> dict:
-    """Load Statcast sample into DB and populate global baselines."""
+    """Load a Statcast sample into the DB and populate the tier-1 baselines."""
     if is_streamlit_cloud():
         from src.ingestion.lite_seed import seed_mlb_from_offline_csv
 
@@ -233,80 +162,76 @@ def seed_mlb_statcast(session: Session, validation_year: int | None = None) -> d
     global LEAGUE_BASELINES
     settings = get_settings()
     validation_year = validation_year or settings.validation_year
-    start_year = validation_year - 3
 
-    statcast_df = load_statcast_sample(start_year, validation_year, max_rows=6000)
+    statcast_df = load_statcast_sample(validation_year - 3, validation_year, max_rows=6000)
     LEAGUE_BASELINES = compute_league_baselines_from_statcast(statcast_df)
-    load_rookie_outcomes(validation_year)
 
     mlb = session.query(League).filter_by(abbreviation="MLB").first()
     if not mlb:
-        raise RuntimeError("MLB league row missing")
-
-    stadium = (
-        session.query(StadiumEnvironment)
-        .filter_by(league_id=mlb.league_id, stadium_name="MLB Reference Park")
-        .first()
-    )
-    if not stadium:
-        stadium = StadiumEnvironment(
-            league_id=mlb.league_id,
-            stadium_name="MLB Reference Park",
-            altitude=500,
-            temperature_mean=22.0,
-            humidity_mean=50.0,
-        )
-        session.add(stadium)
-        session.flush()
+        raise RuntimeError("MLB league row missing. Run: python main.py init-db")
+    stadium = _reference_stadium(session, mlb)
 
     inserted = 0
-    sample = statcast_df.head(500)
-    for i, row in sample.iterrows():
-        name = str(row.get("player_name", f"MLB {i}"))
-        parts = name.split()
-        player = Player(
-            first_name=parts[0] if parts else "MLB",
-            last_name=parts[-1] if len(parts) > 1 else str(i),
-            birth_date=date(1995, 1, 1),
-            throws="R",
-            bats="R",
-            primary_position="P" if "pitcher" in str(row).lower() else "OF",
-        )
-        session.add(player)
-        session.flush()
+    # One Player row per distinct name. The previous version created a new player for
+    # every pitch, producing hundreds of one-row "players" that polluted the roster.
+    players_by_name: dict[str, Player] = {}
+
+    for i, row in statcast_df.head(500).iterrows():
+        name = str(row.get("player_name") or f"MLB Player {i}")
+        player = players_by_name.get(name)
+        if player is None:
+            if len(players_by_name) >= MAX_REFERENCE_PLAYERS:
+                continue
+            parts = name.split()
+            player = Player(
+                first_name=parts[0] if parts else "MLB",
+                last_name=parts[-1] if len(parts) > 1 else "Player",
+                birth_date=date(1995, 1, 1),
+                throws="R",
+                bats="R",
+                primary_position=["P", "OF", "SS", "C", "1B"][len(players_by_name) % 5],
+            )
+            session.add(player)
+            session.flush()
+            players_by_name[name] = player
 
         year = int(row.get("game_year", validation_year))
-        gd = row.get("game_date", date(year, 6, 1))
-        if hasattr(gd, "date"):
-            gd = gd.date()
-        elif isinstance(gd, str):
-            gd = pd.to_datetime(gd).date()
+        game_date = row.get("game_date", date(year, 6, 1))
+        if hasattr(game_date, "date"):
+            game_date = game_date.date()
+        elif isinstance(game_date, str):
+            game_date = pd.to_datetime(game_date).date()
 
         if pd.notna(row.get("release_speed")):
             session.add(
                 RawTrackingData(
                     player_id=player.player_id,
                     stadium_id=stadium.stadium_id,
-                    game_date=gd,
+                    game_date=game_date,
                     context_year=year,
                     pitch_type=str(row.get("pitch_type", "FF"))[:3],
                     release_speed=float(row["release_speed"]),
-                    spin_rate=int(row["release_spin_rate"]) if pd.notna(row.get("release_spin_rate")) else None,
+                    spin_rate=int(row["release_spin_rate"])
+                    if pd.notna(row.get("release_spin_rate"))
+                    else None,
                     vertical_break=float(row["pfx_z"] * 12) if pd.notna(row.get("pfx_z")) else None,
-                    horizontal_break=float(row["pfx_x"] * 12) if pd.notna(row.get("pfx_x")) else None,
+                    horizontal_break=float(row["pfx_x"] * 12)
+                    if pd.notna(row.get("pfx_x"))
+                    else None,
                     vertical_approach_angle=-5.0,
                     extension=6.0,
-                    plate_x=float(np.random.normal(0, 0.5)),
-                    plate_z=float(np.random.normal(2.5, 0.4)),
+                    plate_x=0.0,
+                    plate_z=2.5,
                 )
             )
             inserted += 1
+
         if pd.notna(row.get("launch_speed")):
             session.add(
                 RawTrackingData(
                     player_id=player.player_id,
                     stadium_id=stadium.stadium_id,
-                    game_date=gd,
+                    game_date=game_date,
                     context_year=year,
                     exit_velocity=float(row["launch_speed"]),
                     launch_angle=float(row.get("launch_angle", 15)),
@@ -320,6 +245,13 @@ def seed_mlb_statcast(session: Session, validation_year: int | None = None) -> d
             inserted += 1
 
     session.commit()
-    log_filter_step("mlb_statcast_insert", len(sample), inserted)
-    get_logger().info(f"mlb_seed_complete tracking_rows={inserted} baselines={len(LEAGUE_BASELINES)}")
-    return {"mlb_tracking_rows": inserted, "baselines": len(LEAGUE_BASELINES)}
+    log_filter_step("mlb_statcast_insert", len(statcast_df.head(500)), inserted)
+    get_logger().info(
+        f"mlb_seed_complete players={len(players_by_name)} tracking_rows={inserted} "
+        f"baselines={len(LEAGUE_BASELINES)}"
+    )
+    return {
+        "mlb_players": len(players_by_name),
+        "mlb_tracking_rows": inserted,
+        "baselines": len(LEAGUE_BASELINES),
+    }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import plotly.graph_objects as go
+
 from src.dashboard.data_access import ProjectionView
 
 
@@ -66,49 +67,91 @@ def projection_density_figure(
     return fig
 
 
-def shap_bar_figure(contributions: list[dict], title: str = "Feature Contributions") -> go.Figure | None:
+def shap_bar_figure(
+    contributions: list[dict],
+    title: str = "Feature Contributions",
+    lower_is_better: bool = False,
+    metric_unit: str = "",
+) -> go.Figure | None:
+    """
+    Signed SHAP contributions, coloured by whether they helped the player.
+
+    For ERA a negative contribution is *good* (it lowers the projected ERA), so colour
+    keys off ``lower_is_better`` rather than the raw sign -- green always means "this
+    factor improved the projection".
+    """
     if not contributions:
         return None
 
     labels = [c.get("label", c.get("feature", "")) for c in contributions]
     impacts = [float(c.get("impact", 0)) for c in contributions]
-    colors = ["#2ca02c" if v >= 0 else "#d62728" for v in impacts]
+    helped = [(v < 0) if lower_is_better else (v >= 0) for v in impacts]
+    colors = ["#2ca02c" if good else "#d62728" for good in helped]
 
-    sorted_pairs = sorted(zip(labels, impacts, colors), key=lambda t: abs(t[1]))
-    labels, impacts, colors = zip(*sorted_pairs)
+    labels, impacts, colors = zip(
+        *sorted(zip(labels, impacts, colors, strict=True), key=lambda t: abs(t[1])),
+        strict=True,
+    )
 
+    decimals = 2 if lower_is_better else 4
     fig = go.Figure(
         go.Bar(
             x=impacts,
             y=list(labels),
             orientation="h",
             marker_color=list(colors),
-            text=[f"{v:+.4f}" for v in impacts],
+            text=[f"{v:+.{decimals}f}" for v in impacts],
             textposition="outside",
+            hovertemplate="%{y}: %{x:+." + str(decimals) + "f}<extra></extra>",
         )
     )
+    fig.add_vline(x=0, line_width=1, line_color="#888")
     fig.update_layout(
         title=title,
-        xaxis_title="Impact on Projection",
+        xaxis_title=f"Impact on projected {metric_unit}" if metric_unit else "Impact on projection",
         yaxis_title="",
         template="plotly_white",
-        height=max(320, 40 * len(labels)),
-        margin=dict(l=180),
+        height=max(320, 42 * len(labels)),
+        margin=dict(l=190, r=70),
     )
     return fig
 
 
 def tracking_histogram_figure(breakdown: dict, title: str) -> go.Figure | None:
-    """Optional raw vs adjusted histogram from pipeline breakdown."""
-    dist = breakdown.get("raw_distribution") or breakdown.get("adjusted_distribution")
-    if not dist or not dist.get("bins"):
+    """
+    Raw vs park-adjusted distribution, overlaid.
+
+    The gap between the two series is the environmental correction the normalization
+    layer applied, so showing them together is the point -- one series alone says
+    nothing about what the adjustment did.
+    """
+    raw = breakdown.get("raw_distribution") or {}
+    adjusted = breakdown.get("adjusted_distribution") or {}
+    if not raw.get("bins") and not adjusted.get("bins"):
         return None
-    fig = go.Figure(
-        go.Bar(
-            x=dist["bins"],
-            y=dist["counts"],
-            marker_color="#636efa",
+
+    fig = go.Figure()
+    if raw.get("bins"):
+        fig.add_trace(
+            go.Bar(x=raw["bins"], y=raw["counts"], name="Raw", marker_color="#9aa7ff", opacity=0.75)
         )
+    if adjusted.get("bins"):
+        fig.add_trace(
+            go.Bar(
+                x=adjusted["bins"],
+                y=adjusted["counts"],
+                name="Park-adjusted",
+                marker_color="#1f3fd6",
+                opacity=0.75,
+            )
+        )
+    fig.update_layout(
+        title=title,
+        xaxis_title=breakdown.get("metric", "Value"),
+        yaxis_title="Count",
+        barmode="overlay",
+        template="plotly_white",
+        height=400,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    fig.update_layout(title=title, xaxis_title=dist.get("name", "value"), yaxis_title="Count", template="plotly_white")
     return fig

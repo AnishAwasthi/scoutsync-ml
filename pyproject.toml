@@ -1,0 +1,38 @@
+[project]
+name = "scoutsync-ml"
+version = "0.2.0"
+description = "Cross-league baseball translation pipeline with environmental normalization and SHAP explainability"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv", "data", "docs"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # bugbear
+]
+ignore = [
+    "E501",  # line length is handled by the formatter, not the linter
+    "B008",  # FastAPI dependency defaults are the documented idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately import modules purely to assert on their behaviour.
+"tests/*" = ["B011"]
+# Both entrypoints must put the project root on sys.path before importing from it.
+"main.py" = ["E402"]
+"dashboard.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning:pybaseball.*",
+    "ignore::DeprecationWarning:shap.*",
+]

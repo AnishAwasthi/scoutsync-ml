@@ -7,12 +7,10 @@ from sqlalchemy.orm import Session
 
 from db.models import League, Player, RawTrackingData, StadiumEnvironment
 from src.config import PROJECT_ROOT, get_settings
+from src.ingestion import pybaseball_loader
 from src.ingestion.pybaseball_loader import (
-    LEAGUE_BASELINES,
-    ROOKIE_OUTCOMES,
     compute_league_baselines_from_statcast,
     load_offline_statcast_lite,
-    load_rookie_outcomes_lite,
 )
 from src.ingestion.synthetic_seed import seed_synthetic_data
 from src.logging_config import get_logger
@@ -35,13 +33,11 @@ def seed_cloud_lite(session: Session, num_amateur_players: int = 8) -> dict:
 
 
 def seed_mlb_from_offline_csv(session: Session) -> dict:
-    """Insert MLB tracking from pre-baked CSV; sets global baselines and rookie outcomes."""
-    global LEAGUE_BASELINES, ROOKIE_OUTCOMES
-
+    """Insert MLB reference tracking from the pre-baked CSV; sets tier-1 baselines."""
     settings = get_settings()
     statcast_df = load_offline_statcast_lite()
-    LEAGUE_BASELINES = compute_league_baselines_from_statcast(statcast_df)
-    ROOKIE_OUTCOMES = load_rookie_outcomes_lite(settings.validation_year)
+    # Assign on the owning module so downstream readers see it.
+    pybaseball_loader.LEAGUE_BASELINES = compute_league_baselines_from_statcast(statcast_df)
 
     if session.query(League).count() == 0:
         from src.db.session import seed_reference_leagues
@@ -138,5 +134,5 @@ def seed_mlb_from_offline_csv(session: Session) -> dict:
     return {
         "mlb_tracking_rows": inserted,
         "mlb_players": len(players_by_name),
-        "baselines": len(LEAGUE_BASELINES),
+        "baselines": len(pybaseball_loader.LEAGUE_BASELINES),
     }

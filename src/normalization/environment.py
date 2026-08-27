@@ -23,6 +23,16 @@ def adjust_velocity(raw_velocity: pd.Series, altitude_ft: pd.Series) -> pd.Serie
     return raw_velocity * scalar
 
 
+def adjust_exit_velocity(raw_ev: pd.Series, altitude_ft: pd.Series) -> pd.Series:
+    """Normalize batted-ball exit velocity for altitude, mirroring adjust_velocity.
+
+    Exit velocity is as park-sensitive as pitch velocity, but the batter side of the
+    pipeline had no environmental correction at all -- every batter feature was built
+    from the raw number, so altitude bias passed straight through to the model.
+    """
+    return adjust_velocity(raw_ev, altitude_ft)
+
+
 def adjust_break(raw_break: pd.Series, rho_stadium: pd.Series) -> pd.Series:
     settings = get_settings()
     ratio = settings.rho_std / rho_stadium.replace(0, np.nan)
@@ -79,6 +89,8 @@ def apply_environmental_adjustments(df: pd.DataFrame) -> pd.DataFrame:
         out["adj_spin_rate"] = adjust_break(
             out["spin_rate"].astype(float), out["rho_stadium"]
         )
+    if "exit_velocity" in out.columns:
+        out["adj_exit_velocity"] = adjust_exit_velocity(out["exit_velocity"], out["altitude"])
 
     mean_delta = float((out["altitude"] - get_settings().alt_std_ft).mean())
     mean_ratio = float((get_settings().rho_std / out["rho_stadium"]).mean())

@@ -3,11 +3,14 @@
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from db.models import MlbProjection
+from db.models import MlbProjection, RawTrackingData
 from src.db.session import check_db_connection, get_db_session
-from src.ingestion.parsers import dataframe_to_tracking_records, parse_json_tracking, parse_trackman_csv
+from src.ingestion.parsers import (
+    dataframe_to_tracking_records,
+    parse_json_tracking,
+    parse_trackman_csv,
+)
 from src.pipeline import get_player_breakdown
-from db.models import RawTrackingData
 
 app = FastAPI(title="ScoutSync ML", version="1.0.0")
 

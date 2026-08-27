@@ -20,7 +20,8 @@ def compute_league_baselines(
     group_cols = group_cols or ["league_id"]
     records = []
     for keys, grp in df.groupby(group_cols):
-        key_dict = dict(zip(group_cols, keys if isinstance(keys, tuple) else (keys,)))
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        key_dict = dict(zip(group_cols, key_values, strict=True))
         for col in metric_cols:
             if col not in grp.columns:
                 continue

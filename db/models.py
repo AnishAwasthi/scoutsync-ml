@@ -1,8 +1,9 @@
 """SQLAlchemy ORM models mirroring db/schema.sql."""
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     DateTime,
@@ -10,9 +11,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
-    Text,
 )
-from sqlalchemy import JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -98,7 +97,7 @@ class MlbProjection(Base):
 
     projection_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     player_id: Mapped[int | None] = mapped_column(ForeignKey("players.player_id"))
-    calculation_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    calculation_date: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
     target_season: Mapped[int] = mapped_column(Integer, nullable=False)
 
     proj_wOBA: Mapped[float | None] = mapped_column(Numeric(4, 3))
@@ -123,4 +122,24 @@ class BacktestRun(Base):
     mae_woba: Mapped[float | None] = mapped_column(Numeric(8, 5))
     rmse_era: Mapped[float | None] = mapped_column(Numeric(8, 5))
     mae_era: Mapped[float | None] = mapped_column(Numeric(8, 5))
-    run_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    run_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+
+class PlayerGroundTruth(Base):
+    """
+    Known outcome for a synthetic player, used only by the simulation backtest.
+
+    The synthetic seeder draws a latent ``talent`` per player and uses it to generate
+    both that player's tracking metrics and the ``true_*`` values stored here. The
+    backtest therefore measures whether the pipeline recovers a signal it was given,
+    not whether it predicts real major-league performance. Real players never get a row.
+    """
+
+    __tablename__ = "player_ground_truth"
+
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.player_id"), primary_key=True)
+    role: Mapped[str] = mapped_column(String(10), nullable=False)
+    latent_talent: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False)
+    true_wOBA: Mapped[float | None] = mapped_column(Numeric(4, 3))
+    true_ERA: Mapped[float | None] = mapped_column(Numeric(4, 2))
+    context_year: Mapped[int] = mapped_column(Integer, nullable=False)

@@ -1,20 +1,26 @@
-# Virtual Environment
-.venv/
-__pycache__/
-*.pyc
-
-# Local Databases & State
-*.db
-*.sqlite
-.env
-
-# OS specific files
-.DS_Store.env
-__pycache__/
-*.pyc
+# Virtual environments
 .venv/
 venv/
-data/pybaseball_cache/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Local databases and state
+*.db
+*.sqlite
+*.db.bak
+.env
+
+# Trained model artifacts (regenerate with: python main.py train)
 *.joblib
+data/models/residual_std.json
+
+# Caches
+data/pybaseball_cache/
 .pytest_cache/
+.ruff_cache/
+
+# Editor and OS
 .DS_Store
+.streamlit_test_env

@@ -92,6 +92,20 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 7. Simulation ground truth (synthetic cohort only)
+-- Each synthetic amateur player is generated from a latent "talent" parameter that
+-- drives BOTH their tracking metrics and their true MLB outcome. Storing that outcome
+-- here lets the backtest measure whether the pipeline recovers a known signal.
+-- No real player has a row in this table.
+CREATE TABLE IF NOT EXISTS player_ground_truth (
+    player_id INT PRIMARY KEY REFERENCES players(player_id),
+    role VARCHAR(10) NOT NULL CHECK (role IN ('batter', 'pitcher')),
+    latent_talent NUMERIC(6,4) NOT NULL,
+    true_wOBA NUMERIC(4,3),
+    true_ERA NUMERIC(4,2),
+    context_year INT NOT NULL
+);
+
 -- Reference league seed data
 INSERT INTO leagues (name, abbreviation, competition_tier, base_run_environment)
 VALUES

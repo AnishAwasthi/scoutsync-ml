@@ -1,52 +1,41 @@
+"""Engine, session, and schema bootstrap for ScoutSync.
+
+There is exactly one schema (``db.models.Base``). SQLite and PostgreSQL differ only
+in how the tables get created: PostgreSQL runs ``db/schema.sql``, SQLite uses ORM
+metadata (the DDL file uses SERIAL/JSONB, which SQLite does not understand).
+"""
+
 import os
 from pathlib import Path
 
-from sqlalchemy import Column, Date, Float, Integer, String, Text, create_engine, inspect, text
-from sqlalchemy.exc import OperationalError
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+
+from db.models import Base, League, MlbProjection, Player  # re-exported for callers
 
 # Project root: src/db/session.py -> parents[2]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-Base = declarative_base()
+REFERENCE_LEAGUES = [
+    ("Major League Baseball", "MLB", 1, 4.60),
+    ("Nippon Professional Baseball", "NPB", 2, 4.20),
+    ("Korea Baseball Organization", "KBO", 3, 4.80),
+    ("NCAA Division I", "NCAA", 4, 5.50),
+    ("Cape Cod Baseball League", "CCL", 5, 4.90),
+]
 
-# Explicitly define self-contained models to guarantee flawless table initialization on the cloud
-class Player(Base):
-    __tablename__ = "players"
-    player_id = Column(Integer, primary_key=True, autoincrement=True)
-    first_name = Column(String, nullable=True)
-    last_name = Column(String, nullable=True)
-    birth_date = Column(Date, nullable=True)
-    throws = Column(String, nullable=True)
-    bats = Column(String, nullable=True)
-    primary_position = Column(String, nullable=True)
-
-class MlbProjection(Base):
-    __tablename__ = "mlb_projections"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    player_id = Column(Integer, nullable=False)
-    target_season = Column(Integer, nullable=False)
-    proj_wOBA = Column(Float, nullable=True)
-    proj_wOBA_lower_90 = Column(Float, nullable=True)
-    proj_wOBA_upper_90 = Column(Float, nullable=True)
-    proj_ERA = Column(Float, nullable=True)
-    proj_ERA_lower_90 = Column(Float, nullable=True)
-    proj_ERA_upper_90 = Column(Float, nullable=True)
-    shap_explainability_json = Column(Text, nullable=True)
-
-# Global internal caches—left empty until explicitly invoked
 _engine = None
 _SessionLocal = None
 _sqlite_path: Path | None = None
 
 
 def _resolve_sqlite_path() -> Path:
-    """Absolute DB path in the app directory (writable on Streamlit Cloud)."""
+    """Absolute DB path, overridable so tests and tooling can use a scratch file."""
     global _sqlite_path
     if _sqlite_path is None:
-        _sqlite_path = (PROJECT_ROOT / "scoutsync.db").resolve()
+        override = os.getenv("SCOUTSYNC_SQLITE_PATH")
+        _sqlite_path = (Path(override) if override else PROJECT_ROOT / "scoutsync.db").resolve()
         _sqlite_path.parent.mkdir(parents=True, exist_ok=True)
     return _sqlite_path
 
@@ -61,20 +50,30 @@ def get_engine():
         return _engine
 
     if use_sqlite():
-        db_url = _sqlite_database_url()
         _engine = create_engine(
-            db_url,
+            _sqlite_database_url(),
             connect_args={"check_same_thread": False, "timeout": 30},
             poolclass=StaticPool,
         )
     else:
         db_url = os.getenv(
             "DATABASE_URL",
-            "postgresql://postgres:postgres@localhost:5432/scoutsync",
+            "postgresql://scoutsync:scoutsync@localhost:5432/scoutsync",
         )
         _engine = create_engine(db_url, pool_pre_ping=True)
 
     return _engine
+
+
+def reset_engine() -> None:
+    """Drop cached engine/session/path so a new DATABASE_URL or path takes effect."""
+    global _engine, _SessionLocal, _sqlite_path
+    if _engine is not None:
+        _engine.dispose()
+    _engine = None
+    _SessionLocal = None
+    _sqlite_path = None
+
 
 def get_session_factory():
     global _SessionLocal
@@ -83,63 +82,77 @@ def get_session_factory():
     _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
     return _SessionLocal
 
-def _tables_present(engine) -> bool:
-    inspector = inspect(engine)
-    return inspector.has_table("players") and inspector.has_table("mlb_projections")
+
+def seed_reference_leagues() -> int:
+    """Insert the five reference leagues if absent. Idempotent."""
+    session = get_session_factory()()
+    try:
+        existing = {abbr for (abbr,) in session.query(League.abbreviation).all()}
+        added = 0
+        for name, abbr, tier, run_env in REFERENCE_LEAGUES:
+            if abbr in existing:
+                continue
+            session.add(
+                League(
+                    name=name,
+                    abbreviation=abbr,
+                    competition_tier=tier,
+                    base_run_environment=run_env,
+                )
+            )
+            added += 1
+        session.commit()
+        return added
+    finally:
+        session.close()
 
 
 def init_db() -> None:
-    """Create dashboard tables if missing; safe to call on every Streamlit rerun."""
+    """Create the full schema and seed reference leagues. Safe to call repeatedly."""
     engine = get_engine()
-    if engine.dialect.name == "sqlite":
-        if _tables_present(engine):
-            return
-        try:
-            Base.metadata.create_all(bind=engine, checkfirst=True)
-        except OperationalError as exc:
-            msg = str(exc).lower()
-            if "already exists" in msg:
-                return
-            # Stale/corrupt file from an old schema — reset and retry once
-            if _resolve_sqlite_path().exists():
-                _resolve_sqlite_path().unlink(missing_ok=True)
-            Base.metadata.create_all(bind=engine, checkfirst=True)
-        return
 
-    try:
+    if engine.dialect.name == "postgresql":
+        ddl = (PROJECT_ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
         with engine.begin() as conn:
-            conn.execute(text("SELECT 1"))
-    except Exception:
+            conn.execute(text(ddl))
+    else:
         Base.metadata.create_all(bind=engine, checkfirst=True)
+        seed_reference_leagues()
+
 
 class SmartSessionWrapper:
+    """Session that also works as a context manager and as a FastAPI dependency."""
+
     def __init__(self):
-        factory = get_session_factory()
-        self.db = factory()
-        
+        self.db = get_session_factory()()
+
     def __enter__(self):
         return self.db
-        
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.db.close()
-        
+
     def __getattr__(self, name):
         return getattr(self.db, name)
-        
+
     def __iter__(self):
         try:
             yield self.db
         finally:
             self.db.close()
 
+
 def get_db_session():
     return SmartSessionWrapper()
+
 
 class LazySessionLocal:
     def __call__(self):
         return get_session_factory()()
+
     def __getattr__(self, name):
         return getattr(get_session_factory(), name)
+
 
 SessionLocal = LazySessionLocal()
 
@@ -153,8 +166,7 @@ def use_sqlite() -> bool:
         import streamlit as st
 
         if "USE_SQLITE" in st.secrets:
-            secret_val = str(st.secrets["USE_SQLITE"]).lower().strip()
-            if secret_val in ("true", "1", "yes"):
+            if str(st.secrets["USE_SQLITE"]).lower().strip() in ("true", "1", "yes"):
                 return True
     except Exception:
         pass
@@ -178,9 +190,27 @@ def check_db_connection() -> bool:
 
 
 def has_tracking_schema() -> bool:
-    """True when full tracking pipeline tables exist (not cloud lite schema)."""
+    """True when the pitch-level tracking table exists."""
     try:
-        inspector = inspect(get_engine())
-        return inspector.has_table("raw_tracking_data")
+        return inspect(get_engine()).has_table("raw_tracking_data")
     except Exception:
         return False
+
+
+__all__ = [
+    "Base",
+    "League",
+    "MlbProjection",
+    "Player",
+    "SessionLocal",
+    "check_db_connection",
+    "get_db_session",
+    "get_engine",
+    "get_session_factory",
+    "has_tracking_schema",
+    "init_db",
+    "reset_engine",
+    "seed_reference_leagues",
+    "sqlite_db_path",
+    "use_sqlite",
+]

@@ -2,7 +2,6 @@
 
 from datetime import date
 
-import numpy as np
 import pandas as pd
 
 from src.logging_config import get_logger, log_filter_step
@@ -90,7 +89,8 @@ def build_batter_features(df: pd.DataFrame, league_median_age: float = 21.0) -> 
     grouped = hit_df.groupby(["player_id", "context_year"])
     rows = []
     for (player_id, year), grp in grouped:
-        ev = grp["exit_velocity"]
+        # Prefer the park-adjusted series so altitude bias does not reach the model.
+        ev = grp["adj_exit_velocity"] if "adj_exit_velocity" in grp.columns else grp["exit_velocity"]
         rows.append(
             {
                 "player_id": player_id,
@@ -99,7 +99,12 @@ def build_batter_features(df: pd.DataFrame, league_median_age: float = 21.0) -> 
                 "max_exit_velocity": ev.max(),
                 "pct_90th_exit_velocity": float(ev.quantile(0.9)),
                 "launch_angle_sweetspot_rate": float(sweet.loc[grp.index].mean()),
-                "zone_contact_rate": float((~grp["is_strikeout"].fillna(True) & in_zone.loc[grp.index]).mean()),
+                "zone_contact_rate": float(
+                    (
+                        ~grp["is_strikeout"].fillna(True).astype(bool)
+                        & in_zone.loc[grp.index].astype(bool)
+                    ).mean()
+                ),
                 "out_of_zone_chase_rate": float(chase.loc[grp.index].mean()),
                 "age_relative_to_league": grp["age_at_season"].iloc[0] - league_median_age,
                 "conference_strength_factor": float(
@@ -126,8 +131,11 @@ def enrich_tracking_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 def build_training_frames(
     normalized_df: pd.DataFrame,
     labels_df: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, list[str], list[str]]:
-    """Build combined feature matrix with labels for training."""
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str], list[str]]:
+    """Build per-role feature matrices.
+
+    Returns ``(combined, pitchers, batters, PITCHER_FEATURES, BATTER_FEATURES)``.
+    """
     norm = enrich_tracking_dataframe(normalized_df)
     league_median_age = float(norm["age_at_season"].median()) if "age_at_season" in norm else 21.0
 
