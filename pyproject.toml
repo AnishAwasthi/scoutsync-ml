@@ -32,6 +32,10 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Put the project root on sys.path so `src` and `db` import under a bare `pytest`.
+# `python -m pytest` adds the CWD implicitly and hides the need for this, which is
+# exactly how it passed locally and failed in CI.
+pythonpath = ["."]
 filterwarnings = [
     "ignore::DeprecationWarning:pybaseball.*",
     "ignore::DeprecationWarning:shap.*",
