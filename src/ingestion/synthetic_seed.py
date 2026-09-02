@@ -14,20 +14,29 @@ no public dataset links amateur tracking data to major-league outcomes at the pl
 level, so no such claim is made anywhere in this project.
 
 Environmental bias is injected as the exact inverse of the adjustment in
-``src.normalization.environment``: raw metrics are divided by the altitude scalar and
-scaled by the air-density ratio, so a correct adjustment recovers the latent value.
+``src.normalization.environment``, so a correct adjustment recovers the latent value.
 That is what makes the normalization layer measurable rather than decorative.
+
+The bias goes only where the physics puts it. Break is scaled by the park's air-density
+ratio (Magnus force scales with density) and batted-ball distance by the park's carry
+factor. Release speed, spin rate, and exit velocity are generated park-neutral, because
+none of them is an air-density effect: release speed and spin come out of the hand, and
+exit velocity is measured off the bat before the air has done anything.
 """
 
 from datetime import date, timedelta
 
 import numpy as np
+import pandas as pd
 from sqlalchemy.orm import Session
 
 from db.models import League, Player, PlayerGroundTruth, RawTrackingData, StadiumEnvironment
-from src.config import get_settings
 from src.logging_config import get_logger, log_filter_step
-from src.normalization.environment import air_density_kg_m3
+from src.normalization.environment import (
+    air_density_kg_m3,
+    carry_factor,
+    reference_air_density,
+)
 
 FIRST_NAMES = ["Alex", "Jordan", "Casey", "Riley", "Morgan", "Taylor", "Drew", "Quinn"]
 LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Davis", "Miller", "Wilson", "Moore"]
@@ -54,12 +63,6 @@ STADIUMS = [
     ("CCL", "Eldredge Park", 50),
     ("CCL", "Spillane Field", 30),
 ]
-
-
-def _altitude_scalar(altitude_ft: float) -> float:
-    """Same scalar ``adjust_velocity`` applies, so the seeder can invert it."""
-    settings = get_settings()
-    return 1.0 + settings.alpha * ((altitude_ft - settings.alt_std_ft) / 1000.0)
 
 
 def _birth_date(rng: np.random.Generator) -> date:
@@ -145,15 +148,22 @@ def seed_synthetic_data(session: Session, num_players: int = 50, lite: bool = Fa
         raise RuntimeError("Reference leagues NCAA and CCL must exist. Run: python main.py init-db")
 
     stadiums = _ensure_stadiums(session, leagues)
-    stadium_env = {
-        s.stadium_id: {
-            "altitude": float(s.altitude),
-            "scalar": _altitude_scalar(float(s.altitude)),
-            "rho": air_density_kg_m3(float(s.temperature_mean), float(s.humidity_mean)),
+    rho_ref = reference_air_density()
+    stadium_env = {}
+    for stadium in stadiums:
+        rho = air_density_kg_m3(
+            float(stadium.temperature_mean),
+            float(stadium.humidity_mean),
+            float(stadium.altitude),
+        )
+        stadium_env[stadium.stadium_id] = {
+            "altitude": float(stadium.altitude),
+            "rho": rho,
+            # Magnus scales with density, so break is suppressed by exactly this ratio.
+            "break_ratio": rho / rho_ref,
+            # Thin air lets a batted ball carry farther by exactly this factor.
+            "carry": float(carry_factor(pd.Series([rho])).iloc[0]),
         }
-        for s in stadiums
-    }
-    rho_std = get_settings().rho_std
 
     tracking_count = 0
     ground_truth_count = 0
@@ -186,7 +196,7 @@ def seed_synthetic_data(session: Session, num_players: int = 50, lite: bool = Fa
         if is_pitcher:
             n_rows = int(rng.integers(12, 22)) if lite else int(rng.integers(80, 120))
             tracking_count += _emit_pitches(
-                session, player, stadium, env, rho_std, talent, n_rows, base_date, rng
+                session, player, stadium, env, talent, n_rows, base_date, rng
             )
             session.add(
                 PlayerGroundTruth(
@@ -234,22 +244,21 @@ def _emit_pitches(
     player: Player,
     stadium: StadiumEnvironment,
     env: dict,
-    rho_std: float,
     talent: float,
     n_rows: int,
     base_date: date,
     rng: np.random.Generator,
 ) -> int:
-    """Pitch rows whose raw values carry park bias that normalization should remove."""
+    """Pitch rows. Only break carries park bias, because only break is density-driven."""
     latent_velo = 88.0 + 2.2 * talent
     latent_break = 16.0 + 2.0 * talent
     command_sd = float(np.clip(0.62 - 0.10 * talent, 0.28, 0.95))
 
     for j in range(n_rows):
-        # Invert the adjustment model: raw = latent / scalar, so adj_velocity ~= latent.
-        raw_velo = (latent_velo + rng.normal(0, 1.4)) / env["scalar"]
-        # adjust_break multiplies by rho_std / rho_stadium, so pre-divide by that ratio.
-        raw_break = (latent_break + rng.normal(0, 1.8)) * (env["rho"] / rho_std)
+        # Release speed comes out of the hand: no park term.
+        raw_velo = latent_velo + rng.normal(0, 1.4)
+        # adjust_break multiplies by rho_ref / rho_stadium, so pre-multiply by its inverse.
+        raw_break = (latent_break + rng.normal(0, 1.8)) * env["break_ratio"]
 
         session.add(
             RawTrackingData(
@@ -281,15 +290,19 @@ def _emit_batted_balls(
     base_date: date,
     rng: np.random.Generator,
 ) -> int:
-    """Batted-ball rows; exit velocity carries the same invertible park bias."""
+    """Batted-ball rows. Only distance carries park bias — carry is the drag effect."""
     latent_ev = 89.0 + 3.0 * talent
+    latent_distance = 250.0 + 28.0 * talent
     sweet_spot_shift = 2.5 * talent
     chase_rate = float(np.clip(0.28 - 0.06 * talent, 0.05, 0.55))
     k_rate = float(np.clip(0.22 - 0.05 * talent, 0.03, 0.45))
     zone_sd = float(np.clip(0.55 - 0.08 * talent, 0.25, 0.90))
 
     for j in range(n_rows):
-        raw_ev = (latent_ev + rng.normal(0, 4.0)) / env["scalar"]
+        # Exit velocity is measured off the bat: no park term.
+        raw_ev = latent_ev + rng.normal(0, 4.0)
+        # adjust_hit_distance divides by the carry factor, so pre-multiply by it.
+        raw_distance = (latent_distance + rng.normal(0, 35)) * env["carry"]
         session.add(
             RawTrackingData(
                 player_id=player.player_id,
@@ -298,7 +311,7 @@ def _emit_batted_balls(
                 context_year=CONTEXT_YEAR,
                 exit_velocity=round(float(np.clip(raw_ev, 35, 118)), 1),
                 launch_angle=round(float(np.clip(rng.normal(15 + sweet_spot_shift, 11), -85, 85)), 1),
-                hit_distance=int(np.clip(240 + 12 * talent + rng.normal(0, 60), 5, 545)),
+                hit_distance=int(np.clip(raw_distance, 5, 545)),
                 plate_x=round(float(rng.normal(0, zone_sd)), 2),
                 plate_z=round(float(rng.normal(2.45, zone_sd * 0.8)), 2),
                 is_strikeout=bool(rng.random() < k_rate),

@@ -57,7 +57,7 @@ The architecture is complete, but several limitations affect how results should 
 | Simulation-only validation | Labels are the generator's own ground truth, so the backtest measures signal recovery, not real predictive accuracy |
 | No model artifacts in repo | `.joblib` files and `residual_std.json` are gitignored; produce them with `python main.py train` |
 | Small cohort | ~12 held-out players per role means backtest metrics carry wide uncertainty |
-| Assumed constants | The altitude coefficient (`alpha`) and tier map (`gamma_tier_map`) are chosen, not fitted |
+| Assumed constants | The carry sensitivity (0.28) is derived from published Coors figures; the tier map (`gamma_tier_map`) is chosen, not fitted |
 | Unused park factors | `park_factor_hr` / `park_factor_obp` are stored but do not feed the adjustment |
 
 These are stated limitations, not hidden defects. The central one is the second row: no
@@ -80,6 +80,12 @@ An earlier revision had four problems severe enough to record here:
    single-output regressor per role.
 4. **SHAP discarded direction.** Payloads used `mean(|SHAP|)` plus a hard-coded sign flip
    for one feature. Per-player contributions are now signed.
+5. **The environmental model contradicted the physics.** `air_density_kg_m3` computed
+   density at a fixed sea-level pressure, so density never varied with altitude at all —
+   the only thing moving it was a humidity term roughly 38x too strong. Meanwhile release
+   speed was scaled *up* at altitude (compounding bias rather than removing it) while
+   carry, the effect that actually exists, was not corrected at all. Rewritten against
+   the barometric formula and published Coors figures; see below.
 
 ---
 
@@ -145,6 +151,29 @@ rather than quietly reporting in-sample fit. Results are stored in `backtest_run
 
 ---
 
+## Environmental Normalization
+
+Air density is computed from the ISA barometric formula plus a vapour-pressure humidity
+term, and reproduces the published Coors ratio (0.83 computed against 0.82 reported).
+
+Corrections are applied only where air density is the causal mechanism:
+
+| Metric | Mechanism | Correction |
+|---|---|---|
+| Break / movement | Magnus force ∝ air density; Coors ≈ 82% of sea level | Scale up by `ρ_ref / ρ_park` |
+| Batted-ball distance | Reduced drag; ~5% more carry at Coors | Divide by the carry factor |
+| Release speed | Measured out of the hand; drag acts afterwards | None (documented identity) |
+| Exit velocity | Measured off the bat | None |
+| Spin rate | Imparted by the hand | None |
+
+The plate-speed effect is real but small — a ball loses about 8% of its speed at Coors
+versus 10% at Fenway, roughly 1 mph — and applies to plate velocity, not to the release
+velocity Statcast reports. It is deliberately not modeled.
+
+Reference: Alan Nathan, [Baseball At High Altitude](https://baseball.physics.illinois.edu/Denver.html).
+
+---
+
 ## Model and Projection Logic
 
 **Targets:** one single-output regressor per role — batters predict wOBA, pitchers predict
@@ -195,7 +224,7 @@ USE_SQLITE=true streamlit run dashboard.py
 
 **What exists today:**
 
-- Held-out backtest metrics (RMSE, MAE, and skill vs a mean baseline for both wOBA and ERA), stored in `backtest_runs`
+- Held-out backtest metrics (RMSE, MAE, and skill vs a mean baseline for both wOBA and ERA), stored in `backtest_runs`; currently +38.2% wOBA and +68.0% ERA skill
 - 65 tests across normalization math, the model layer, SHAP payload semantics, and the full seed → train → project pipeline
 - Regression tests pinning each previously shipped defect listed above
 - GitHub Actions CI running lint plus tests on Python 3.11–3.13, and a network-free end-to-end CLI smoke test

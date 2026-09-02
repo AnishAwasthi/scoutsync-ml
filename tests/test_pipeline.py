@@ -78,37 +78,68 @@ def test_labels_correlate_with_latent_talent(seeded_db):
     assert era_corr < -0.5, "higher talent should mean lower ERA"
 
 
-def test_normalization_recovers_the_latent_metric(seeded_db):
-    """
-    The seeder injects park bias as the inverse of the adjustment, so the adjusted
-    series must track latent talent more tightly than the raw one does. If this fails
-    the environmental layer is decorative.
-    """
-    raw = load_tracking_dataframe(seeded_db)
-    normalized = normalize_tracking_df(raw)
-    truth = load_ground_truth(seeded_db).set_index("player_id")["latent_talent"]
-
-    pitches = normalized[normalized["release_speed"].notna()]
-    grouped = pitches.groupby("player_id").agg(
-        raw_mean=("release_speed", "mean"), adj_mean=("adj_velocity", "mean")
+def _recovery_correlations(normalized, truth, mask_col, raw_col, adj_col):
+    """Correlation of the raw vs adjusted per-player mean against latent talent."""
+    subset = normalized[normalized[mask_col].notna()]
+    grouped = subset.groupby("player_id").agg(
+        raw_mean=(raw_col, "mean"), adj_mean=(adj_col, "mean")
     )
     grouped["talent"] = truth.reindex(grouped.index)
     grouped = grouped.dropna()
-
-    raw_corr = abs(np.corrcoef(grouped["raw_mean"], grouped["talent"])[0, 1])
-    adj_corr = abs(np.corrcoef(grouped["adj_mean"], grouped["talent"])[0, 1])
-
-    assert adj_corr >= raw_corr, f"adjustment lost signal: raw={raw_corr:.4f} adj={adj_corr:.4f}"
-    assert adj_corr > 0.8
+    return (
+        abs(np.corrcoef(grouped["raw_mean"], grouped["talent"])[0, 1]),
+        abs(np.corrcoef(grouped["adj_mean"], grouped["talent"])[0, 1]),
+    )
 
 
-def test_exit_velocity_gets_a_park_adjustment(seeded_db):
-    raw = load_tracking_dataframe(seeded_db)
-    normalized = normalize_tracking_df(raw)
-    assert "adj_exit_velocity" in normalized.columns
+def test_break_adjustment_recovers_latent_talent(seeded_db):
+    """
+    The seeder suppresses break by each park's density ratio, exactly as the Magnus
+    force does. Undoing that must make break track talent more tightly than the raw
+    observation. If this fails the environmental layer is decorative.
+    """
+    normalized = normalize_tracking_df(load_tracking_dataframe(seeded_db))
+    truth = load_ground_truth(seeded_db).set_index("player_id")["latent_talent"]
 
-    hits = normalized[normalized["exit_velocity"].notna()]
-    differing = (hits["adj_exit_velocity"] - hits["exit_velocity"]).abs() > 1e-9
+    raw_corr, adj_corr = _recovery_correlations(
+        normalized, truth, "release_speed", "vertical_break", "adj_vertical_break"
+    )
+    assert adj_corr > raw_corr, f"adjustment lost signal: raw={raw_corr:.4f} adj={adj_corr:.4f}"
+
+
+def test_carry_adjustment_recovers_latent_talent(seeded_db):
+    """Same test on the batter side: park carry is inflated, the adjustment removes it."""
+    normalized = normalize_tracking_df(load_tracking_dataframe(seeded_db))
+    truth = load_ground_truth(seeded_db).set_index("player_id")["latent_talent"]
+
+    raw_corr, adj_corr = _recovery_correlations(
+        normalized, truth, "exit_velocity", "hit_distance", "adj_hit_distance"
+    )
+    assert adj_corr > raw_corr, f"adjustment lost signal: raw={raw_corr:.4f} adj={adj_corr:.4f}"
+
+
+def test_release_speed_and_exit_velocity_are_park_neutral(seeded_db):
+    """
+    Neither is an air-density effect, so the pipeline must leave them alone. A
+    correction here would inject bias rather than remove it.
+    """
+    normalized = normalize_tracking_df(load_tracking_dataframe(seeded_db))
+    assert "adj_exit_velocity" not in normalized.columns
+
+    pitches = normalized[normalized["release_speed"].notna()]
+    pd.testing.assert_series_equal(
+        pitches["adj_velocity"],
+        pitches["release_speed"].astype(float),
+        check_names=False,
+    )
+
+
+def test_hit_distance_is_park_adjusted(seeded_db):
+    normalized = normalize_tracking_df(load_tracking_dataframe(seeded_db))
+    assert "adj_hit_distance" in normalized.columns
+
+    hits = normalized[normalized["hit_distance"].notna()]
+    differing = (hits["adj_hit_distance"] - hits["hit_distance"]).abs() > 1e-9
     assert differing.any(), "no batted ball was park-adjusted"
 
 

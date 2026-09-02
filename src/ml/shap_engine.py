@@ -28,6 +28,7 @@ FEATURE_LABELS = {
     "tier_coefficient": "Competition Tier",
     "max_exit_velocity": "Max Exit Velocity",
     "pct_90th_exit_velocity": "90th Percentile Exit Velo",
+    "adj_90th_hit_distance": "Park-Adjusted Carry (90th Pct)",
     "launch_angle_sweetspot_rate": "Launch Angle Sweet Spot",
     "zone_contact_rate": "Zone Contact Rate",
     "out_of_zone_chase_rate": "Chase Rate (O-Zone)",

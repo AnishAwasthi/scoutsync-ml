@@ -251,7 +251,7 @@ def render_explainability(session, player_id: int, role: str, projection: Projec
         lower_is_better=lower_is_better,
         metric_unit=projection.metric_unit,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     st.caption(
         "Green improves the projection, red worsens it. Values are signed SHAP "
         "contributions in units of "
@@ -309,7 +309,7 @@ def main() -> None:
             st.subheader("Outcome Distribution")
             fig_density = projection_density_figure(projection)
             if fig_density:
-                st.plotly_chart(fig_density, use_container_width=True)
+                st.plotly_chart(fig_density, width="stretch")
             else:
                 st.info("Insufficient data to render the distribution curve.")
 
@@ -323,7 +323,7 @@ def main() -> None:
             breakdown, "Raw vs park-adjusted tracking distribution"
         )
         if fig_tracking:
-            st.plotly_chart(fig_tracking, use_container_width=True)
+            st.plotly_chart(fig_tracking, width="stretch")
             st.caption(
                 "The shift between the two series is the altitude and air-density "
                 "correction applied before the metric reaches the model."

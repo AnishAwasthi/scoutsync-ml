@@ -19,9 +19,17 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://scoutsync:scoutsync@localhost:5432/scoutsync"
     use_sqlite: bool = False
     log_level: str = "INFO"
-    alpha: float = 0.003
+
+    # Reference park that every metric is normalized to. Air density at these conditions
+    # is the denominator for the break and carry adjustments.
     alt_std_ft: int = 500
-    rho_std: float = 1.225
+    ref_temperature_c: float = 22.0
+    ref_humidity_pct: float = 50.0
+
+    # Carry sensitivity to air density: a ~18% density drop (sea level -> Coors) buys
+    # about 5% of batted-ball distance, so 0.05 / 0.18 ~= 0.28.
+    carry_density_sensitivity: float = 0.28
+
     validation_year: int = 2024
     pybaseball_cache_dir: str = str(PROJECT_ROOT / "data" / "pybaseball_cache")
     model_dir: str = str(PROJECT_ROOT / "data" / "models")
@@ -34,10 +42,10 @@ class Settings(BaseSettings):
         5: 0.45,
     }
 
-    # Ideal gas constants for air density (simplified moist air)
-    pressure_pa: float = 101325.0
-    m_dry: float = 0.02897
-    gas_constant: float = 8.314
+    # Molar masses (kg/mol) and the universal gas constant, for moist-air density.
+    m_dry: float = 0.0289652
+    m_vapor: float = 0.018016
+    gas_constant: float = 8.31446
 
 
 def _use_sqlite_env() -> bool:

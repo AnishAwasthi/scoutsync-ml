@@ -302,12 +302,14 @@ def get_player_breakdown(session: Session, player_id: int, role: str | None = No
         is_pitcher = role == "pitcher"
     else:
         is_pitcher = player_raw["release_speed"].notna().any()
-    raw_col = "release_speed" if is_pitcher else "exit_velocity"
-    adj_col = "adj_velocity" if is_pitcher else "adj_exit_velocity"
+    # Show the metric the environmental layer actually corrects for each role: break for
+    # pitchers (Magnus scales with density), carry for batters (drag scales with density).
+    raw_col = "vertical_break" if is_pitcher else "hit_distance"
+    adj_col = "adj_vertical_break" if is_pitcher else "adj_hit_distance"
 
     return {
         "player_id": player_id,
-        "metric": "Release Speed (mph)" if is_pitcher else "Exit Velocity (mph)",
+        "metric": "Induced Vertical Break (in)" if is_pitcher else "Batted-Ball Distance (ft)",
         "raw_distribution": bins(player_raw.get(raw_col, pd.Series(dtype=float)), "raw"),
         "adjusted_distribution": bins(adjusted.get(adj_col, pd.Series(dtype=float)), "adjusted"),
         "shap_contributions": latest_shap(session, player_id),

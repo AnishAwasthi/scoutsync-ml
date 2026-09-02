@@ -21,6 +21,9 @@ PITCHER_FEATURES = [
 BATTER_FEATURES = [
     "max_exit_velocity",
     "pct_90th_exit_velocity",
+    # Park-adjusted carry. Exit velocity itself is not an air-density effect, so this is
+    # the only place a batter's environment legitimately enters the feature vector.
+    "adj_90th_hit_distance",
     "launch_angle_sweetspot_rate",
     "zone_contact_rate",
     "out_of_zone_chase_rate",
@@ -89,8 +92,11 @@ def build_batter_features(df: pd.DataFrame, league_median_age: float = 21.0) -> 
     grouped = hit_df.groupby(["player_id", "context_year"])
     rows = []
     for (player_id, year), grp in grouped:
-        # Prefer the park-adjusted series so altitude bias does not reach the model.
-        ev = grp["adj_exit_velocity"] if "adj_exit_velocity" in grp.columns else grp["exit_velocity"]
+        # Exit velocity needs no park correction; distance does.
+        ev = grp["exit_velocity"]
+        distance = (
+            grp["adj_hit_distance"] if "adj_hit_distance" in grp.columns else grp["hit_distance"]
+        ).astype(float)
         rows.append(
             {
                 "player_id": player_id,
@@ -98,6 +104,7 @@ def build_batter_features(df: pd.DataFrame, league_median_age: float = 21.0) -> 
                 "role": "batter",
                 "max_exit_velocity": ev.max(),
                 "pct_90th_exit_velocity": float(ev.quantile(0.9)),
+                "adj_90th_hit_distance": float(distance.quantile(0.9)),
                 "launch_angle_sweetspot_rate": float(sweet.loc[grp.index].mean()),
                 "zone_contact_rate": float(
                     (

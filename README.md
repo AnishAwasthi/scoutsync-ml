@@ -41,21 +41,43 @@ and the test suite that keeps them honest.
 
 ## The problem
 
-Evaluating talent across leagues is confounded by environment and competition. A 95 mph
-fastball at 5,000 feet behaves differently than at sea level — thinner air means less
-drag and less break. A .400 wOBA against weak competition is not a .400 wOBA against
-strong competition. Raw tracking numbers are not comparable across contexts.
+Evaluating talent across leagues is confounded by environment and competition. A curveball
+at 5,000 feet breaks less than the same pitch at sea level. A fly ball carries farther. A
+.400 wOBA against weak competition is not a .400 wOBA against strong competition. Raw
+tracking numbers are not comparable across contexts.
 
 ScoutSync normalizes those effects out before modeling:
 
-1. **Environmental** — altitude scalar and moist-air density (ideal gas) correct
-   velocity, exit velocity, spin, and break.
+1. **Environmental** — moist-air density from the barometric formula corrects the two
+   metrics that air density actually drives (see below).
 2. **Competition** — `M_norm = ((M_adj − μ_league) / σ_league) × γ_tier`, with γ falling
    from 1.00 (MLB) to 0.45 (Cape Cod).
 3. **Projection** — one gradient-boosted regressor per role predicts wOBA (batters) or
    ERA (pitchers), with a 90% interval from held-out residual spread.
 4. **Explanation** — signed per-player SHAP attributions showing which factors moved
    that specific projection, and in which direction.
+
+### Which metrics are actually park-sensitive
+
+Getting this right matters more than adjusting everything. Air density affects the ball
+*in flight*, so it moves some metrics a lot, some barely, and some not at all:
+
+| Metric | Air-density effect | What the pipeline does |
+|---|---|---|
+| **Break / movement** | Magnus force scales with density. Coors ≈ 82% of sea-level density → an 18″ break becomes ~14.8″ | Scale **up** in thin air, by `ρ_ref / ρ_park` |
+| **Batted-ball carry** | Reduced drag → ~5% farther at Coors | Scale **down** in thin air |
+| **Release speed** | None. `release_speed` is measured out of the hand; drag acts *after* release. The ball arrives ~1 mph faster at Coors — a plate-speed effect on a release-speed number | **Nothing** |
+| **Exit velocity** | None. Measured off the bat; the collision does not involve the air | **Nothing** |
+| **Spin rate** | None. Imparted by the hand | **Nothing** |
+
+The model's density function reproduces the published Coors figure — 0.83 against a
+reported 0.82 — using the ISA barometric formula plus a proper vapour-pressure humidity
+term. Physics reference: Alan Nathan,
+[Baseball At High Altitude](https://baseball.physics.illinois.edu/Denver.html).
+
+This is not a cosmetic detail. Park-adjusted carry is the **single most important batter
+feature** by SHAP importance, and correcting the physics raised held-out wOBA skill from
++25.5% to +38.2%.
 
 ## Quickstart
 
@@ -109,8 +131,8 @@ From a clean `seed → train → backtest` on the default 120-player cohort:
 --- SIMULATION RECOVERY METRICS — SEASON 2024 ---
 Synthetic cohort with known ground truth; not real MLB predictive accuracy.
 
- wOBA: n=12   (held-out)  RMSE=0.0198  MAE=0.0166  baseline(mean)=0.0266  skill=+25.5%
-  ERA: n=12   (held-out)  RMSE=0.2879  MAE=0.2348  baseline(mean)=0.8804  skill=+67.3%
+ wOBA: n=12   (held-out)  RMSE=0.0164  MAE=0.0137  baseline(mean)=0.0266  skill=+38.2%
+  ERA: n=12   (held-out)  RMSE=0.2817  MAE=0.2268  baseline(mean)=0.8804  skill=+68.0%
 ```
 
 `skill` is the reduction in RMSE against a predict-the-cohort-mean baseline, which is the
@@ -132,7 +154,7 @@ src/
     lite_seed.py           Network-free seeding for hosted demo and CI
     fastapi_app.py         REST endpoints
   normalization/
-    environment.py         Altitude scalar, moist-air density, metric adjustment
+    environment.py         Barometric moist-air density; break and carry corrections
     league_context.py      μ/σ baselines and tier-weighted z-scores
   features/builder.py      Pitch/batted-ball rows -> player-season feature matrices
   ml/
@@ -144,6 +166,10 @@ src/
 
 **Design notes worth calling out:**
 
+- **Adjust only what physics says to adjust.** Break and carry are corrected; release
+  speed, exit velocity, and spin rate are explicitly passed through, with
+  `adjust_release_speed` kept as a documented identity so a reader finds the reasoning
+  where they would look for the adjustment.
 - **One estimator per role.** Batters predict wOBA, pitchers predict ERA. An earlier
   design used a multi-output regressor whose extra target columns were constants; it
   produced a pitcher model that returned 4.50 for every player with a zero-width
@@ -165,12 +191,15 @@ USE_SQLITE=true pytest
 ruff check .
 ```
 
-69 tests covering normalization math, the model layer, SHAP payload semantics, the REST
+81 tests covering normalization physics, the model layer, SHAP payload semantics, the REST
 API, and the full seed → train → project pipeline against a throwaway SQLite database.
 
-A large share are named `test_regression_*` and pin specific bugs that shipped in an
-earlier version — constant pitcher predictions, zero-width intervals, unsigned SHAP,
-`UnboundLocalError` on single-player frames, projections accumulating across retrains.
+The physics tests pin direction *and* magnitude against published values, not just "the
+number changed" — an earlier version's density function ignored altitude entirely and
+still passed a looser test. A large share of the rest are named `test_regression_*` and
+pin specific bugs that shipped earlier: constant pitcher predictions, zero-width
+intervals, unsigned SHAP, `UnboundLocalError` on single-player frames, projections
+accumulating across retrains.
 [`tests/test_no_fabricated_output.py`](tests/test_no_fabricated_output.py) statically
 asserts the dashboard never constructs a projection from numeric literals, so the
 hosted demo cannot regress to displaying invented numbers.
@@ -180,11 +209,12 @@ hosted demo cannot regress to displaying invented numbers.
 - **No real amateur→MLB validation.** Discussed above; the central limitation.
 - **Small cohort.** The default 120-player seed leaves ~12 held-out players per role, so
   backtest metrics carry wide uncertainty. Seed more players for a tighter estimate.
-- **Simplified physics.** Air density uses a simplified moist-air ideal gas model; the
-  altitude scalar is linear and its coefficient (`alpha = 0.003`) is a chosen constant,
-  not a fitted one.
+- **Linearized carry model.** The carry sensitivity (`0.28`) is derived from published
+  Coors figures and linearized around the reference density. Real carry depends on launch
+  angle and exit velocity too — a 100 mph ball at 33° gains far more than the average.
 - **Park factors are unused.** `park_factor_hr` / `park_factor_obp` are stored but do
-  not yet feed the adjustment.
+  not yet feed the adjustment; only altitude, temperature, and humidity do.
+- **No wind or batted-ball spin.** Both matter for carry and neither is modeled.
 - **Tier coefficients are assumed.** The γ values encode an assumed ordering of league
   difficulty rather than a measured one.
 
