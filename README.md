@@ -12,8 +12,6 @@
 
 ---
 
-## ⚠️ Read this first: what the numbers mean
-
 **The amateur data in this project is synthetic, and the model is validated against a
 simulation — not against real major-league outcomes.**
 
